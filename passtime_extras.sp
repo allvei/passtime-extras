@@ -3,153 +3,360 @@
 #include <tf2>
 #include <tf2_stocks>
 #include <clientprefs>
+#include <clients>
+#include <sdktools_gamerules>
 
-#pragma newdecls required
 #pragma semicolon 1
 
-public Plugin myinfo =
-{
-    name        = "passtime.tf extras",
-    author      = "xCape",
-    description = "Add a setteam command for setting the player team",
-    version     = "1.0.0",
-    url         = "https://github.com/allvei" 
+// Constants
+#define RED         0
+#define BLU         1
+#define TEAM_OFFSET 2
+
+#define PC  return Plugin_Continue
+#define PH  return Plugin_Handled
+#define pub public
+#define Act Action
+#define Han Handle
+#define i   int
+#define v   void
+#define f   float
+#define b   bool
+#define c   char
+
+#define CREATE_CMD(%1) pub Act %1( i client, i args )
+#define CREATE_EV_ACT(%1) pub Act %1( Event event, const c[] name, b dontBroadcast )
+#define CREATE_EV(%1) pub %1( Event event, const c[] name, b dontBroadcast )
+
+public Plugin myinfo = {
+        name        = "passtime.tf extras",
+        author      = "xCape",
+        description = "Plugin for use in passtime.tf servers",
+        version     = "1.3.0",
+        url         = "https://github.com/allvei"
 }
 
-Handle g_hCookieFOV;
-Handle g_hCvarFOVMin;
-Handle g_hCvarFOVMax;
+// Handles
+Han g_hCookieFOV;
+Han g_hCvarFOVMin;
+Han g_hCvarFOVMax;
 
-public void OnPluginStart() {
-    RegAdminCmd( "sm_setteam", Command_SetTeam, ADMFLAG_GENERIC, "Set a client's team" );
-    RegConsoleCmd( "sm_fov",   Command_SetFOV,  "Set your field of view." );
+// Backup system for FOV tracking when Steam connection is down
+b g_bSteamConnected = true;              // Track if Steam is currently connected
+b g_bBackupFOVDB    = false;             // Track if we're using the backup system
+b g_bPlayerTracked[ MAXPLAYERS + 1 ];    // Track if we have a FOV value for this player
+i g_iPlayerFOV[     MAXPLAYERS + 1 ];    // Store FOV values for each player
 
-    g_hCookieFOV  = RegClientCookie( "sm_fov_cookie", "Desired client field of view", CookieAccess_Private );
-    g_hCvarFOVMin = CreateConVar( "sm_fov_min", "20", "Minimum client field of view", _, 1, 1.0, 1, 175.0 );
-    g_hCvarFOVMax = CreateConVar( "sm_fov_max", "130", "Maximum client field of view", _, 1, 1.0, 1, 175.0 );
+// Respawn time control
+ConVar g_cRespawnTime;
+b g_bRespawnEnabled = true;    // Track if respawn mode is active (similar to soap_tournament.sp's dming)
 
-    HookEvent( "player_spawn", Event_PlayerSpawn );
+pub OnPluginStart() {
+    // We'll initialize the backup system only when needed
+    //                         Command...
+    RegAdminCmd( "sm_setteam", CSetTeam,      ADMFLAG_GENERIC, "Set a client's team" );
+    RegAdminCmd( "sm_st",      CSetTeam,      ADMFLAG_GENERIC, "Set a client's team" );
+    RegAdminCmd( "sm_ready",   CReady,        ADMFLAG_GENERIC, "Set a team's ready status" );
+
+    RegConsoleCmd( "sm_fov",   CSetFOV,                        "Set your field of view." );
+
+    g_hCookieFOV   = RegClientCookie( "sm_fov_cookie", "Desired client field of view", CookieAccess_Private );
+
+    g_hCvarFOVMin  = CreateConVar( "sm_fov_min",      "70",  "Minimum client field of view", _, 1, 1.0, 1, 175.0 );
+    g_hCvarFOVMax  = CreateConVar( "sm_fov_max",      "120", "Maximum client field of view", _, 1, 1.0, 1, 175.0 );
+    g_cRespawnTime = CreateConVar( "sm_respawn_time", "0.0", "Time in seconds before player respawns after death", FCVAR_NOTIFY );
+
+    // Set default respawn time to 0.0 for immediate respawns during ready phase
+    g_cRespawnTime.SetFloat( 0.0 );
+
+    // Hook events
+    //                              EventPlayer...
+    HookEvent( "player_spawn",      EPSpawn );
+    HookEvent( "player_connect",    EPConnect );
+    HookEvent( "player_disconnect", EPDisconnect );
+    HookEvent( "player_death",      EPDeath );
+}
+pub OnGameFrame() {
+    RequestFrame( checkStatus, GameRules_GetRoundState() );
+    if ( isMatchLive() ) g_bRespawnEnabled = false;
+    else g_bRespawnEnabled = true;
 }
 
+checkStatus( RoundState oldstatus ) {
+    RoundState x = GameRules_GetRoundState();
+    if ( oldstatus != x ) PrintToChatAll("Roundstate: %d", x);
+}
+
+// Commands
+
+// Command to manually set a team's ready status
+CREATE_CMD(CReady) {
+    if ( args != 2 ) return EndCmd( client, "Usage: sm_ready <red|blu> <0|1>" );
+
+    c teamArg[ 10 ];
+    c statusArg[ 2 ];
+
+    GetCmdArg( 1, teamArg,   sizeof( teamArg ) );
+    GetCmdArg( 2, statusArg, sizeof( statusArg ) );
+
+    i teamIndex = ParseTeamIndex( teamArg );
+    i status    = StringToInt( statusArg );
+
+    // Validate input
+    if ( teamIndex == -1 ) return EndCmd( client, "Invalid team. Use 'red|r', 'blue|blu|b' or 'spectator|spec|s'." );
+    if ( status < 0 || status > 1 ) return EndCmd( client, "Invalid status. Use 0 (not ready) or 1 (ready)." );
+
+    // Set the team's ready status
+    i gameRulesTeamOffset = teamIndex + TEAM_OFFSET;
+    GameRules_SetProp( "m_bTeamReady", status, 1, gameRulesTeamOffset );
+
+    PH;
+}
 // Change client's team
-public Action Command_SetTeam( int client, int args ) {
-    char input_team[ 5 ];
+CREATE_CMD(CSetTeam) {
+    c input_team[ 5 ];
     GetCmdArg( 2, input_team, sizeof( input_team ) );
     TFTeam team = ParseTeam( input_team );
 
-    if ( args != 2 ) {
-        return UsageError( client, "Usage: sm_setteam <#userid|name> <spec|red|blue>", args );
-    }
+    if ( args != 2 || team == TFTeam_Unassigned ) return EndCmd( client, "Usage: sm_setteam <#userid|name> <spec|red|blu>", args );
 
-    char arg_playerTarget[ 33 ];
+    c arg_playerTarget[ 33 ];
     GetCmdArg( 1, arg_playerTarget, sizeof( arg_playerTarget ) );
 
-    if ( team == TFTeam_Unassigned ) {
-        return UsageError( client, "Setting the unassigned team is not allowed.", args );
-    }
+    i target_list[ MAXPLAYERS ];
+    c target_name[ MAX_TARGET_LENGTH ];
+    b tn_is_ml     = false;
+    i target_count = ProcessTargetString( arg_playerTarget, client, target_list, MAXPLAYERS, COMMAND_FILTER_CONNECTED, target_name, sizeof( target_name ), tn_is_ml );
+    b check        = false;
 
-    int  target_list[ MAXPLAYERS ];
-    char target_name[ MAX_TARGET_LENGTH ];
-
-    // Get client(s)
-    bool tn_is_ml     = false;
-    int  target_count = ProcessTargetString( arg_playerTarget, client, target_list, MAXPLAYERS, COMMAND_FILTER_CONNECTED, target_name, sizeof( target_name ), tn_is_ml );
+    if ( target_count == COMMAND_TARGET_NONE ) PH;
 
     // Change team of client(s)
-    for ( int i; i < target_count; i++ ) {
-        int targetId = target_list[ i ];
+    for ( i n = 0; n < target_count; n++ ) {
+        i targetId = target_list[ n ];
+        if ( !IsValidClient( targetId ) || TF2_GetClientTeam( targetId ) == team ) {
+            continue;
+        }
+        check = true;
         ForcePlayerSuicide( targetId );
         TF2_ChangeClientTeam( targetId, team );
-        TF2_RespawnPlayer( targetId );
+        if ( team != TFTeam_Spectator ) {
+            TF2_RespawnPlayer( targetId );
+        }
     }
 
-    char team_name[ 5 ];
-    GetTeamName( view_as<int>( team ), team_name, sizeof( team_name ) );
+    if ( check ) {
+        for ( i n = 1; n <= MaxClients; n++ ) {
+            GameRules_SetProp( "m_bTeamReady", 0, .element = n );
+        }
 
-    ReplyToCommand( client, "Switched %s to %s", target_name, team_name );
-    return Plugin_Handled;
-}
+        c team_name[ 5 ];
+        GetTeamName( view_as<int>( team ), team_name, sizeof( team_name ) );
 
-// Parse TFTeam from string
-TFTeam ParseTeam( char[] team ) {
-    return StrEqual( team, "spec" ) ? TFTeam_Spectator
-         : StrEqual( team, "red" )  ? TFTeam_Red
-         : StrEqual( team, "blu" )  ? TFTeam_Blue
-         : TFTeam_Unassigned;
-}
-
-// Retrieves the client's FOV from the cookie and applies it, returns false if invalid
-bool RestoreFOV( int client ) {
-    char cookie[ 4 ];
-    GetClientCookie( client, g_hCookieFOV, cookie, sizeof( cookie ) );
-    int fov = StringToInt( cookie ),
-        min = GetConVarInt( g_hCvarFOVMin ),
-        max = GetConVarInt( g_hCvarFOVMax );
-    if ( fov < min || fov > max ) return 0;
-    SetFOV( client, fov );
-    return 1;
-}
-
-// Sets the client's FOV
-void SetFOV( int client, int fov ) {
-    SetEntProp( client, Prop_Send, "m_iFOV", fov );
-    SetEntProp( client, Prop_Send, "m_iDefaultFOV", fov );
-}
-
-// Restores the client's FOV on spawn
-public void Event_PlayerSpawn( Event event, const char[] name, bool dontBroadcast ) {
-    int client = GetClientOfUserId( event.GetInt( "userid" ) );
-    if ( !AreClientCookiesCached( client ) || !RestoreFOV( client ) ) return;
-}
-
-// Restores the client's FOV when they are teleported
-public void TF2_OnConditionAdded( int client, TFCond cond ) {
-    if ( cond != TFCond_TeleportedGlow || !RestoreFOV( client ) ) return;
-}
-
-// Restores the client's FOV when they unzoom
-public void TF2_OnConditionRemoved( int client, TFCond cond ) {
-    if ( cond != TFCond_Zoomed || !RestoreFOV( client ) ) return;
-}
-
-// Retrieves the client's FOV from their local config and stores it in a cookie
-public void OnFOVQueried( QueryCookie cookie, int client, ConVarQueryResult result, const char[] cvarName, const char[] fov ) {
-    if ( result != ConVarQuery_Okay ) return;
-    SetClientCookie( client, g_hCookieFOV, "" );
-    SetFOV( client, StringToInt( fov ) );
-}
-
-public Action Command_SetFOV( int client, int args ) {
-    if ( !AreClientCookiesCached( client ) ) {
-        return UsageError( client, "\x04[SM] \x01Unable to load FOV data." );
+        ReplyToCommand( client, "Switched %s to %s", target_name, team_name );
     }
-    if ( args != 1 ) {
-        return UsageError( client, "Usage: sm_fov <fov>" );
-    }
-    int fov = GetCmdArgInt( 1 ),
-        min = GetConVarInt( g_hCvarFOVMin ),
-        max = GetConVarInt( g_hCvarFOVMax );
+    PH;
+}
+// Set your field of view
+CREATE_CMD(CSetFOV) {
+    if ( args != 1 ) return EndCmd( client, "Usage: sm_fov <fov>" );
+
+    i fov = GetCmdArgInt( 1 ),
+      min = GetConVarInt( g_hCvarFOVMin ),
+      max = GetConVarInt( g_hCvarFOVMax );
+
     if ( fov == 0 ) {
         QueryClientConVar( client, "fov_desired", OnFOVQueried );
-        return UsageError( client, "\x04[SM] \x01Your FOV has been reset." );
+        return EndCmd( client, "Your FOV has been reset." );
     }
-    if ( fov < min ) {
-        return UsageError( client, "\x04[SM] \x01The minimum FOV you can set is %d.", min );
+
+    if ( fov < min ) return EndCmd( client, "The minimum FOV you can set is %d.", min );
+    if ( fov > max ) return EndCmd( client, "The maximum FOV you can set is %d.", max );
+
+    // Try to store in cookies if available
+    b cookieSuccess = false;
+    if ( AreClientCookiesCached( client ) ) {
+        c cookie[ 4 ];
+        IntToString( fov, cookie, sizeof( cookie ) );
+        SetClientCookie( client, g_hCookieFOV, cookie );
+        cookieSuccess     = true;
+        g_bSteamConnected = true;    // Steam is connected if cookies work
+
+        // If we were using backup system but Steam is now connected, we can disable it
+        if ( g_bBackupFOVDB ) SetBackupSystem( false );
+    } else {
+        // Steam is down, initialize backup system if not already done
+        if ( !g_bBackupFOVDB ) SetBackupSystem( true );
+        g_bSteamConnected          = false;
+
+        // Store in backup system
+        g_iPlayerFOV[ client ]     = fov;
+        g_bPlayerTracked[ client ] = true;
+        PrintToChat( client, "Steam connection down. Your FOV is saved locally for this session." );
     }
-    if ( fov > max ) {
-        return UsageError( client, "\x04[SM] \x01The maximum FOV you can set is %d.", max );
-    }
-    char cookie[ 4 ];
-    IntToString( fov, cookie, sizeof( cookie ) );
-    SetClientCookie( client, g_hCookieFOV, cookie );
+
+    // Apply FOV immediately
     SetFOV( client, fov );
-    ReplyToCommand( client, "\x04[SM] \x01Your FOV has been set to %d.", fov );
-    return Plugin_Handled;
+
+    ReplyToCommand( client, "Your FOV has been set to %d.%s", fov,
+                    cookieSuccess ? "" : " (Steam connection down, saved for this session only)" );
+    PH;
 }
 
-public Action UsageError( int client, const char[] format, any ... ) {
-    char buffer[ 254 ];
+// Events
+
+// Player death event handler for respawn control
+CREATE_EV_ACT(EPDeath) {
+    if ( !g_bRespawnEnabled ) PC;
+
+    i userid = GetClientUserId( GetClientOfUserId( event.GetInt( "userid" ) ) );
+
+    if ( g_cRespawnTime.FloatValue <= 0.0 ) RequestFrame( Respawn, userid );
+    PC;
+}
+// Player connect event - prepare for tracking
+CREATE_EV(EPConnect) {
+    i client = GetClientOfUserId( event.GetInt( "userid" ) );
+
+    if ( client > 0 && client <= MaxClients && g_bBackupFOVDB ) {
+        // Reset tracking for this player slot if backup system is active
+        g_bPlayerTracked[ client ] = false;
+        g_iPlayerFOV[ client ]     = 0;
+    }
+}
+// Player disconnect event - clean up tracking
+CREATE_EV(EPDisconnect) {
+    i userid = event.GetInt( "userid" );
+    i client = GetClientOfUserId( userid );
+
+    if ( client > 0 && client <= MaxClients && g_bBackupFOVDB ) {
+        // Clear tracking data for this slot if backup system is active
+        g_bPlayerTracked[ client ] = false;
+        g_iPlayerFOV[ client ]     = 0;
+    }
+}
+// Restores the client's FOV on spawn
+CREATE_EV(EPSpawn) {
+    i client = GetClientOfUserId( event.GetInt( "userid" ) );
+    if ( !IsValidClient( client ) ) return;
+
+    // Try to restore FOV from cookies first
+    if ( AreClientCookiesCached( client ) ) {
+        if ( RestoreFOV( client ) ) {
+            // If we were using backup but Steam is now connected, we can disable it
+            if ( !g_bSteamConnected ) {
+                g_bSteamConnected = true;
+                if ( g_bBackupFOVDB ) SetBackupSystem( false );
+            }
+            return;
+        }
+    } else if ( !g_bBackupFOVDB ) {
+        // Steam is down, initialize backup system
+        SetBackupSystem( true );
+        g_bSteamConnected = false;
+    }
+
+    // If cookies failed or aren't cached, try backup system
+    if ( g_bBackupFOVDB && g_bPlayerTracked[ client ] && g_iPlayerFOV[ client ] > 0 ) {
+        SetFOV( client, g_iPlayerFOV[ client ] );
+    } else if ( !g_bSteamConnected ) {
+        PrintToChat( client, "Use !fov command to set your preferred FOV." );
+    }
+}
+// Retrieves the client's FOV from their local config and stores it in a cookie
+pub OnFOVQueried( QueryCookie cookie, i client, ConVarQueryResult result, const c[] cvarName, const c[] fov ) {
+    if ( result != ConVarQuery_Okay ) return;
+    SetClientCookie( client, g_hCookieFOV, "" );
+    SetFOV(          client, StringToInt( fov ) );
+}
+
+// Helpers
+
+// Sends a message to the client and returns PH
+Action EndCmd( i client, const c[] format, any... ) {
+    c buffer[ 254 ];
     VFormat( buffer, sizeof( buffer ), format, 3 );
     ReplyToCommand( client, "%s", buffer );
-    return Plugin_Handled;
+    PH;
+}
+b IsValidClient( i client ) {
+    return IsClientInGame( client ) && !IsFakeClient( client ) && IsPlayerAlive( client ) && IsClientConnected( client );
+}
+// Sets the client's FOV
+SetFOV( i client, i fov ) {
+    SetEntProp( client, Prop_Send, "m_iFOV",        fov );
+    SetEntProp( client, Prop_Send, "m_iDefaultFOV", fov );
+}
+// Retrieves the client's FOV from the cookie and applies it, returns false if invalid
+b RestoreFOV( i client ) {
+    c cookie[ 4 ];
+    GetClientCookie( client, g_hCookieFOV, cookie, sizeof( cookie ) );
+    i fov = StringToInt( cookie ),
+      min = GetConVarInt( g_hCvarFOVMin ),
+      max = GetConVarInt( g_hCvarFOVMax );
+
+    if ( fov < min || fov > max ) return false;
+
+    // If backup system is active, update it with cookie value
+    if ( g_bBackupFOVDB ) {
+         g_iPlayerFOV[ client ]     = fov;
+         g_bPlayerTracked[ client ] = true;
+    }
+
+    SetFOV( client, fov );
+    return true;
+}
+// Parse TFTeam from string
+TFTeam ParseTeam( c[] t ) {
+    return StrEqual( t, "spectator" ) || StrEqual( t, "spec" ) || StrEqual( t, "s" ) ? TFTeam_Spectator
+         : StrEqual( t, "red" )       || StrEqual( t, "r" )                          ? TFTeam_Red
+         : StrEqual( t, "blue" )      || StrEqual( t, "blu" )  || StrEqual( t, "b" ) ? TFTeam_Blue
+                                                                                     : TFTeam_Unassigned;
+}
+// Converts team name string to RED/BLU constants
+i ParseTeamIndex( c[] t ) {
+    return StrEqual( t, "red" ) || StrEqual( t, "r" )                          ? RED
+         : StrEqual( t, "blu" ) || StrEqual( t, "blue" ) || StrEqual( t, "b" ) ? BLU
+                                                                               : -1;
+}
+// Enable or disable the backup system based on Steam connection status
+SetBackupSystem( b a ) {
+    if ( g_bBackupFOVDB == a ) return;    // Already in desired state
+    g_bBackupFOVDB = a;
+    // Initialize/clear player tracking arrays
+    for ( i n = 0; n <= MaxClients; n++ ) {
+        g_iPlayerFOV[ n ]     = 0;
+        g_bPlayerTracked[ n ] = false;
+    }
+
+    if ( a ) PrintToServer( "Backup FOV system enabled - Steam connection is down" );
+    else PrintToServer( "Backup FOV system disabled - Steam connection restored" );
+}
+b isMatchLive() {
+    if ( GameRules_GetRoundState() == RoundState_Preround ) return true;
+    return false;
+}
+// Respawn player
+pub Respawn( any userid ) {
+    i client = GetClientOfUserId( userid );
+
+    if ( client != 0 && GetClientTeam( client ) > 1 && !IsPlayerAlive( client ) ) TF2_RespawnPlayer( client );
+}
+
+// Forwards
+
+// Called when a client's cookies have been loaded
+pub OnClientCookiesCached( i client ) {
+    // Steam connection is now available
+    g_bSteamConnected = true;
+
+    // If we were using backup system but Steam is now connected, we can disable it
+    if ( g_bBackupFOVDB ) SetBackupSystem( false );
+
+    // Try to load from cookies
+    RestoreFOV( client );
+}
+// Restores the client's FOV when they are teleportedConfigFormat
+pub TF2_OnConditionRemoved( i client, TFCond cond ) {
+    if ( cond != TFCond_Zoomed || !RestoreFOV( client ) ) return;
 }
