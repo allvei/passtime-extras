@@ -6,6 +6,7 @@
 #include <clients>
 #include <sdktools_gamerules>
 #include <sdktools_trace>
+#include <sdktools_entoutput>
 
 #pragma semicolon 1
 
@@ -13,6 +14,9 @@
 #define RED         0
 #define BLU         1
 #define TEAM_OFFSET 2
+
+// Custom condition for tracking players in spawn rooms
+#define TFCond_InSpawnRoom 100
 
 #define PC  return Plugin_Continue
 #define PH  return Plugin_Handled
@@ -48,6 +52,11 @@ b g_bBackupFOVDB    = false;             // Track if we're using the backup syst
 b g_bPlayerTracked[ MAXPLAYERS + 1 ];    // Track if we have a FOV value for this player
 i g_iPlayerFOV[     MAXPLAYERS + 1 ];    // Store FOV values for each player
 
+// Spawn room tracking
+i g_iPlayerInSpawnRoomCount[MAXPLAYERS + 1];  // Track how many spawn rooms a player is in
+b g_bResupplyKeyDown[MAXPLAYERS + 1];        // Track if resupply key is currently down
+b g_bResupplyUsed[MAXPLAYERS + 1];          // Track if resupply has been used during current key press
+
 // Respawn time control
 ConVar g_cvRespawnTime;
 ConVar g_cvTournamentMode;
@@ -63,7 +72,8 @@ pub OnPluginStart() {
     RegAdminCmd( "sm_ready",   CReady,        ADMFLAG_GENERIC, "Set a team's ready status" );
 
     RegConsoleCmd( "sm_fov",   CSetFOV,                        "Set your field of view." );
-    RegConsoleCmd( "sm_pt_resupply", CRespawnSelf,                "Respawn yourself if you're in your spawnroom" );
+    RegConsoleCmd( "+sm_pt_resupply", CResupplyKeyDown,           "Press and hold to resupply when in spawnroom" );
+    RegConsoleCmd( "-sm_pt_resupply", CResupplyKeyUp,             "Release resupply key" );
 
     g_hCookieFOV   = RegClientCookie( "sm_fov_cookie", "Desired client field of view", CookieAccess_Private );
 
@@ -80,15 +90,15 @@ pub OnPluginStart() {
 
     // Hook events
     //                              EventPlayer...
-    HookEvent( "player_spawn",      EPSpawn );
-    HookEvent( "player_connect",    EPConnect );
-    HookEvent( "player_disconnect", EPDisconnect );
-    HookEvent( "player_death",      EPDeath );
+    HookEvent( "player_spawn",           EPSpawn );
+    HookEvent( "player_connect",         EPConnect );
+    HookEvent( "player_disconnect",      EPDisconnect );
+    HookEvent( "player_death",           EPDeath );
     HookEvent( "tournament_stateupdate", ETournamentStateUpdate );
-    HookEvent( "teamplay_round_start", ERoundStart );
-    HookEvent( "teamplay_round_win", ERoundEnd );
-    HookEvent( "teamplay_game_over", EGameOver );
-    HookEvent( "tf_game_over", EGameOver );
+    HookEvent( "teamplay_round_start",   ERoundStart );
+    HookEvent( "teamplay_round_win",     ERoundEnd );
+    HookEvent( "teamplay_game_over",     EGameOver );
+    HookEvent( "tf_game_over",           EGameOver );
     
     // Hook tournament restart command
     RegServerCmd( "mp_tournament_restart", CTournamentRestart, "" );
@@ -99,45 +109,64 @@ pub OnPluginStart() {
     
     // Check ready phase on plugin start
     CheckReadyUpPhase();
+    
+    // Hook spawn room entity outputs
+    HookEntityOutput("func_respawnroom", "OnStartTouch", OnSpawnRoomStartTouch);
+    HookEntityOutput("func_respawnroom", "OnEndTouch", OnSpawnRoomEndTouch);
+    
+    // Initialize spawn room tracking array
+    for (i n = 1; n <= MaxClients; n++) {
+        g_iPlayerInSpawnRoomCount[n] = 0;
+        g_bResupplyKeyDown[n] = false;
+        g_bResupplyUsed[n] = false;
+    }
 }
+
 // Check if we're in the ready-up phase and enable/disable custom respawn times accordingly
 v CheckReadyUpPhase() {
-    // Check if tournament mode is enabled
-    if (g_cvTournamentMode != null && g_cvTournamentMode.BoolValue) {
-        // Check if both teams are ready
-        b redReady = GameRules_GetProp("m_bTeamReady", 1, 2) != 0;
-        b bluReady = GameRules_GetProp("m_bTeamReady", 1, 3) != 0;
+    // Get tournament mode status
+    b tournamentMode = g_cvTournamentMode.BoolValue;
+    
+    // Check if we're in tournament mode
+    if (!tournamentMode) {
+        // Not in tournament mode, disable custom respawn
         
-        g_bTeamReadyState[RED] = redReady;
-        g_bTeamReadyState[BLU] = bluReady;
-        
-        // If both teams are ready, disable custom respawn
-        if (redReady && bluReady) {
-            StopCustomRespawn();
-        } else {
-            StartCustomRespawn();
-        }
+        StopCustomRespawn();
+        return;
+    }
+    
+    // Check if both teams are ready
+    b redReady = view_as<b>(GameRules_GetProp("m_bTeamReady", 1, TEAM_OFFSET + RED));
+    b bluReady = view_as<b>(GameRules_GetProp("m_bTeamReady", 1, TEAM_OFFSET + BLU));
+    
+    // Update our internal tracking
+    g_bTeamReadyState[RED] = redReady;
+    g_bTeamReadyState[BLU] = bluReady;
+    
+    
+    // If both teams are ready, stop custom respawn (live phase)
+    if (redReady && bluReady) {
+        StopCustomRespawn();
+    } else {
+        // Otherwise, start custom respawn (ready-up phase)
+        StartCustomRespawn();
     }
 }
 
-// Enable custom respawn times
+// Start custom respawn mode
 v StartCustomRespawn() {
-    if (g_bRespawnModeActive) {
-        return;
+    if (!g_bRespawnModeActive) {
+        g_bRespawnModeActive = true;
+        g_cvRespawnTime.SetFloat(0.0);
     }
-    
-    g_bRespawnModeActive = true;
-    PrintToChatAll("Instant respawn enabled!");
 }
 
-// Disable custom respawn times
+// Stop custom respawn mode
 v StopCustomRespawn() {
-    if (!g_bRespawnModeActive) {
-        return;
+    if (g_bRespawnModeActive) {
+        g_bRespawnModeActive = false;
+        g_cvRespawnTime.RestoreDefault();
     }
-    
-    g_bRespawnModeActive = false;
-    PrintToChatAll("Instant respawn disabled!");
 }
 
 // Commands
@@ -171,6 +200,7 @@ CREATE_CMD(CReady) {
 
     PH;
 }
+
 // Change client's team
 CREATE_CMD(CSetTeam) {
     c input_team[ 5 ];
@@ -216,6 +246,7 @@ CREATE_CMD(CSetTeam) {
     }
     PH;
 }
+
 // Set your field of view
 CREATE_CMD(CSetFOV) {
     if ( args != 1 ) return EndCmd( client, "Usage: sm_fov <fov>" );
@@ -251,7 +282,6 @@ CREATE_CMD(CSetFOV) {
         // Store in backup system
         g_iPlayerFOV[ client ]     = fov;
         g_bPlayerTracked[ client ] = true;
-        PrintToChat( client, "Steam connection down. Your FOV is saved locally for this session." );
     }
 
     // Apply FOV immediately
@@ -264,17 +294,28 @@ CREATE_CMD(CSetFOV) {
 
 // Events
 
-// Player death event handler for respawn control
-CREATE_EV_ACT(EPDeath) {
-    if (!g_bRespawnModeActive) PC;
+// Handle player death event
+pub Action EPDeath( Event event, const c[] name, b dontBroadcast ) {
+    i userid = event.GetInt( "userid" );
+    i client = GetClientOfUserId(userid);
     
-    i userid = GetClientOfUserId( GetClientOfUserId( event.GetInt( "userid" ) ) );
+    // Validate client before proceeding
+    if (client <= 0 || client > MaxClients || !IsClientInGame(client)) {
+        PC;
+    }
+    
+    
+    if (!g_bRespawnModeActive) {
+        PC;
+    }
     
     if (g_bRespawnOverride || g_cvRespawnTime.FloatValue <= 0.0) {
         RequestFrame( Respawn_Frame, userid );
     }
+    
     PC;
 }
+
 // Player connect event - prepare for tracking
 CREATE_EV(EPConnect) {
     i client = GetClientOfUserId( event.GetInt( "userid" ) );
@@ -285,6 +326,7 @@ CREATE_EV(EPConnect) {
         g_iPlayerFOV[ client ]     = 0;
     }
 }
+
 // Player disconnect event - clean up tracking
 CREATE_EV(EPDisconnect) {
     i userid = event.GetInt( "userid" );
@@ -296,6 +338,7 @@ CREATE_EV(EPDisconnect) {
         g_iPlayerFOV[ client ]     = 0;
     }
 }
+
 // Restores the client's FOV on spawn
 CREATE_EV(EPSpawn) {
     i client = GetClientOfUserId( event.GetInt( "userid" ) );
@@ -321,9 +364,9 @@ CREATE_EV(EPSpawn) {
     if ( g_bBackupFOVDB && g_bPlayerTracked[ client ] && g_iPlayerFOV[ client ] > 0 ) {
         SetFOV( client, g_iPlayerFOV[ client ] );
     } else if ( !g_bSteamConnected ) {
-        PrintToChat( client, "Use !fov command to set your preferred FOV." );
     }
 }
+
 // Retrieves the client's FOV from their local config and stores it in a cookie
 pub OnFOVQueried( QueryCookie cookie, i client, ConVarQueryResult result, const c[] cvarName, const c[] fov ) {
     if ( result != ConVarQuery_Okay ) return;
@@ -340,18 +383,18 @@ Action EndCmd( i client, const c[] format, any... ) {
     ReplyToCommand( client, "%s", buffer );
     PH;
 }
+
 // Checks if a client in-game, connected, not fake, alive and in a valid team
 b IsValidClient( i client ) {
-    return IsClientInGame( client ) && !IsFakeClient( client ) && IsPlayerAlive( client ) && IsClientConnected( client );
+    return client > 0 && client <= MaxClients && IsClientInGame( client ) && !IsFakeClient( client ) && IsPlayerAlive( client ) && IsClientConnected( client );
 }
-b IsPlayerInTeam( i client ) {
-    return ( GetClientTeam( client ) == RED || GetClientTeam( client ) == BLU );
-}
+
 // Sets the client's FOV
 SetFOV( i client, i fov ) {
     SetEntProp( client, Prop_Send, "m_iFOV",        fov );
     SetEntProp( client, Prop_Send, "m_iDefaultFOV", fov );
 }
+
 // Retrieves the client's FOV from the cookie and applies it, returns false if invalid
 b RestoreFOV( i client ) {
     c cookie[ 4 ];
@@ -371,6 +414,7 @@ b RestoreFOV( i client ) {
     SetFOV( client, fov );
     return true;
 }
+
 // Parse TFTeam from string
 TFTeam ParseTeam( c[] t ) {
     return StrEqual( t, "spectator" ) || StrEqual( t, "spec" ) || StrEqual( t, "s" ) ? TFTeam_Spectator
@@ -378,12 +422,14 @@ TFTeam ParseTeam( c[] t ) {
          : StrEqual( t, "blue" )      || StrEqual( t, "blu" )  || StrEqual( t, "b" ) ? TFTeam_Blue
                                                                                      : TFTeam_Unassigned;
 }
+
 // Converts team name string to RED/BLU constants
 i ParseTeamIndex( c[] t ) {
     return StrEqual( t, "red" ) || StrEqual( t, "r" )                          ? RED
          : StrEqual( t, "blu" ) || StrEqual( t, "blue" ) || StrEqual( t, "b" ) ? BLU
                                                                                : -1;
 }
+
 // Enable or disable the backup system based on Steam connection status
 SetBackupSystem( b a ) {
     if ( g_bBackupFOVDB == a ) return;    // Already in desired state
@@ -397,35 +443,30 @@ SetBackupSystem( b a ) {
     if ( a ) PrintToServer( "Backup FOV system enabled - Steam connection is down" );
     else PrintToServer( "Backup FOV system disabled - Steam connection restored" );
 }
+
 // Command to override respawn time
 CREATE_CMD(CRespawnOverride) {
-    if (args != 1) {
-        ReplyToCommand(client, "Usage: sm_respawn_override <0|1>");
-        return 3;
-    }
+    if (args < 1) return EndCmd( client, "Usage: sm_respawn_override <0|1>" );
     
-    c arg[2];
-    GetCmdArg(1, arg, sizeof(arg));
-    i value = StringToInt(arg);
+    c arg1[8];
+    GetCmdArg( 1, arg1, sizeof( arg1 ) );
+    i value = StringToInt( arg1 );
     
     g_bRespawnOverride = (value != 0);
-    ReplyToCommand(client, "[Respawn Control] Respawn override %s", g_bRespawnOverride ? "enabled" : "disabled");
     
-    PH;
+    return EndCmd( client, "Respawn override %s", g_bRespawnOverride ? "enabled" : "disabled" );
 }
 
-// Tournament restart command handler
-pub Act CTournamentRestart(i args) {
-    PrintToServer("[Respawn Control] Tournament restart detected, resetting ready state and enabling respawn mode");
-    g_bTeamReadyState[0] = false;
-    g_bTeamReadyState[1] = false;
-    StartCustomRespawn();
-    PH;
-}
-
-// Tournament state update event handler
-CREATE_EV(ETournamentStateUpdate) {
+// Handle tournament restart command
+pub Action CTournamentRestart( i args ) {
     CheckReadyUpPhase();
+    PH;
+}
+
+// Handle tournament state update event
+pub Action ETournamentStateUpdate( Event event, const c[] name, b dontBroadcast ) {
+    CheckReadyUpPhase();
+    PC;
 }
 
 // Round start event handler
@@ -447,97 +488,120 @@ CREATE_EV(EGameOver) {
     GameRules_SetProp("m_bTeamReady", 0, 1, 3, false);
     StartCustomRespawn();
 }
-// Respawn player frame callback
+// Respawn frame callback
 pub v Respawn_Frame( any userid ) {
+    // Get client from userid and validate
     i client = GetClientOfUserId( userid );
     
-    if ( client != 0 && GetClientTeam( client ) > 1 && !IsPlayerAlive( client ) ) {
-        TF2_RespawnPlayer( client );
-    }
-}
-
-// Command to respawn yourself if in spawnroom
-CREATE_CMD(CRespawnSelf) {
-    // Check if client is valid
-    if (!IsValidClient(client)) {
-        return EndCmd(client, "You must be in-game to use this command.");
-    }
-
-    if (!IsPlayerInTeam(client)) {
-        return EndCmd(client, "You must be on a team to use this command.");
+    
+    // Validate client is connected and in-game
+    if (client <= 0 || client > MaxClients || !IsClientInGame(client)) {
+        return;
     }
     
-    // Check if player is in their own spawnroom
-    if (!IsPlayerInSpawnRoom(client)) {
-        return EndCmd(client, "You must be in your team's spawnroom to use this command.");
-    }
-    
-    // Respawn the player
-    ForcePlayerSuicide(client);
-    RequestFrame(RespawnAfterSuicide, GetClientUserId(client));
-    
-    return EndCmd(client, "Respawning...");
-}
-
-// Check if a player is in their own spawnroom
-b IsPlayerInSpawnRoom(i client) {
-    // Check if player is in a spawn area using TF2-specific detection
-    
-    // Get player's current position
-    f pos[3];
-    GetClientAbsOrigin(client, pos);
-    
-    // Create a trace ray from the player's position downward
-    f endPos[3];
-    endPos[0] = pos[0];
-    endPos[1] = pos[1];
-    endPos[2] = pos[2] - 20.0; // Trace downward a bit
-    
-    // Perform the trace
-    TR_TraceRayFilter(pos, endPos, MASK_PLAYERSOLID, RayType_EndPoint, TraceFilter_DontHitPlayers, client);
-    
-    if (TR_DidHit()) {
-        // Get the entity that was hit
-        i entity = TR_GetEntityIndex();
-        
-        if (entity > 0) {
-            c classname[64];
-            GetEdictClassname(entity, classname, sizeof(classname));
-            
-            // Check if the entity is a spawn room floor/trigger
-            if (StrContains(classname, "func_respawnroom") != -1 || 
-                StrContains(classname, "trigger_spawn") != -1) {
-                return true;
-            }
-        }
-    }
-    
-    // Check if player has respawn room protection
-    if (TF2_IsPlayerInCondition(client, TFCond_Ubercharged) && 
-        !TF2_IsPlayerInCondition(client, TFCond_UberchargedHidden) && 
-        !TF2_IsPlayerInCondition(client, TFCond_UberchargedCanteen)) {
-        // Player has spawn protection, likely in spawn room
-        return true;
-    }
-    
-    return false;
-}
-
-// Respawn player after suicide
-pub v RespawnAfterSuicide(any userid) {
-    i client = GetClientOfUserId(userid);
-    if (client != 0 && GetClientTeam(client) > 1) {
+    // Only respawn if on a team and not alive
+    if (GetClientTeam(client) > 1 && !IsPlayerAlive(client)) {
         TF2_RespawnPlayer(client);
     }
 }
 
-// Trace filter that ignores players
-pub b TraceFilter_DontHitPlayers(i entity, i contentsMask, any data) {
-    // Don't hit players or their projectiles
-    if (entity > 0 && entity <= MaxClients) {
-        return false;
+// Command for when resupply key is pressed
+CREATE_CMD(CResupplyKeyDown) {
+    // Check if client is valid
+    if (!IsClientInGame(client)) {
+        return EndCmd(client, "You must be in-game to use this command.");
     }
-    return true;
+    
+    // Mark the key as down and reset used flag
+    g_bResupplyKeyDown[client] = true;
+    g_bResupplyUsed[client] = false;
+    
+    // Try to resupply immediately if in spawn room
+    TryResupplyPlayer(client);
+    
+    PH;
+}
+
+// Command for when resupply key is released
+CREATE_CMD(CResupplyKeyUp) {
+    // Check if client is valid
+    if (!IsClientInGame(client)) {
+        return EndCmd(client, "You must be in-game to use this command.");
+    }
+    
+    // Mark the key as up
+    g_bResupplyKeyDown[client] = false;
+    
+    PH;
+}
+
+// Try to resupply a player if conditions are met
+v TryResupplyPlayer(i client) {
+    // Check if key is down and resupply hasn't been used yet
+    if (!g_bResupplyKeyDown[client] || g_bResupplyUsed[client]) {
+        return;
+    }
+    
+    // Check if player is alive
+    if (!IsPlayerAlive(client)) {
+        return;
+    }
+    
+    // Check if player is in a valid team
+    i team = GetClientTeam(client);
+    if (team <= 1) {
+        return;
+    }
+    
+    // Check if player is in their own spawnroom
+    if (!IsPlayerInSpawnRoom(client)) {
+        return;
+    }
+    
+    // Resupply the player
+    TF2_RespawnPlayer(client);
+    
+    // Mark as used for this key press
+    g_bResupplyUsed[client] = true;
+}
+
+// Check if a player is in their own spawnroom
+b IsPlayerInSpawnRoom(i client) {
+    // Check if the player's spawn room count is greater than 0
+    return g_iPlayerInSpawnRoomCount[client] > 0;
+}
+
+// Spawn room entry detection
+pub v OnSpawnRoomStartTouch(const c[] output, i caller, i activator, f delay) {
+    // Check if the activator is a valid client
+    if (activator > 0 && activator <= MaxClients && IsClientInGame(activator)) {
+        // Increment the player's spawn room count
+        g_iPlayerInSpawnRoomCount[activator]++;
+        
+        // Try to resupply if key is down
+        TryResupplyPlayer(activator);
+    }
+}
+
+// Spawn room exit detection
+pub v OnSpawnRoomEndTouch(const c[] output, i caller, i activator, f delay) {
+    // Check if the activator is a valid client
+    if (activator > 0 && activator <= MaxClients && IsClientInGame(activator)) {
+        // Decrement the player's spawn room count, but don't go below 0
+        if (g_iPlayerInSpawnRoomCount[activator] > 0) {
+            g_iPlayerInSpawnRoomCount[activator]--;
+        }
+    }
+}
+
+
+
+// Called when a client disconnects
+pub OnClientDisconnect(i client) {
+    // Reset spawn room tracking
+    g_iPlayerInSpawnRoomCount[client] = 0;
+    g_bResupplyKeyDown[client] = false;
+    g_bResupplyUsed[client] = false;
 }
 
 // Forwards
