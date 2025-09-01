@@ -1,3 +1,4 @@
+// Imports
 #include <sdktools_functions>
 #include <sourcemod>
 #include <tf2>
@@ -42,7 +43,7 @@ public Plugin myinfo = {
     author      = "xCape",
     description = "Plugin for use in passtime.tf servers",
     version     = "1.5",
-    url         = "https://github.com/allvei"
+    url         = "https://github.com/allvei/passtime-extras"
 }
 
 // Handles
@@ -72,12 +73,10 @@ i g_iSpawnTeam[2048];                               // Track which team a spawn 
 b g_bResupplyDn[MAXPLAYERS + 1];                    // Track if resupply key is currently down
 b g_bResupplyUp[MAXPLAYERS + 1];                    // Track if resupply has been used during current key press
 
-// No-damage toggle per player
+// No-damage & infinite ammo toggle per player
 b g_bNoDamage[MAXPLAYERS + 1];
 i g_iPreDamageHP[MAXPLAYERS + 1];
 b g_bPendingRestoreHP[MAXPLAYERS + 1];
-
-// Infinite ammo toggle per player
 b g_bInfiniteAmmo[MAXPLAYERS + 1];
 
 // Original ammo values for infinite ammo restoration (only allocated for players using infinite ammo)
@@ -110,7 +109,7 @@ i g_iSavedAmmoType[MAX_SLOTS][2];
 i g_iSavedAmmoCount[MAX_SLOTS][2];
 
 pub OnPluginStart() {
-    // Register admin commands
+    // Admin commands
     RAC( "sm_setteam",         CSetTeam,        ADMFLAG_GENERIC, "Set a client's team" );
     RAC( "sm_st",              CSetTeam,        ADMFLAG_GENERIC, "Set a client's team" );
     RAC( "sm_setclass",        CSetClass,       ADMFLAG_GENERIC, "Set a client's class" );
@@ -119,15 +118,13 @@ pub OnPluginStart() {
     RAC( "sm_rdy",             CReady,          ADMFLAG_GENERIC, "Set a team's ready status" );
     RAC( "sm_debug_roundtime", CRoundTimeDebug, ADMFLAG_GENERIC, "Debug: print team_round_timer info" );
     RAC( "sm_drt",             CRoundTimeDebug, ADMFLAG_GENERIC, "Debug: print team_round_timer info" );
-    
-    // Emergency tournament admin commands
-    RAC( "sm_enable_resupply", CToggleResupply, ADMFLAG_ROOT, "Emergency: Toggle resupply functionality" );
-    RAC( "sm_enable_respawn",  CToggleRespawn,  ADMFLAG_ROOT, "Emergency: Toggle instant respawn" );
-    RAC( "sm_enable_immunity", CToggleImmunity, ADMFLAG_ROOT, "Emergency: Toggle immunity and infinite ammo" );
-    RAC( "sm_enable_saveload", CToggleSaveLoad, ADMFLAG_ROOT, "Emergency: Toggle save/load spawn functionality" );
-    RAC( "sm_plugin_status",   CPluginStatus,   ADMFLAG_ROOT, "Show current plugin feature status" );
+    RAC( "sm_enable_resupply", CToggleResupply, ADMFLAG_GENERIC, "Toggle resupply functionality" );
+    RAC( "sm_enable_respawn",  CToggleRespawn,  ADMFLAG_GENERIC, "Toggle instant respawn" );
+    RAC( "sm_enable_immunity", CToggleImmunity, ADMFLAG_GENERIC, "Toggle immunity and infinite ammo" );
+    RAC( "sm_enable_saveload", CToggleSaveLoad, ADMFLAG_GENERIC, "Toggle save/load spawn functionality" );
+    RAC( "sm_plugin_status",   CPluginStatus,   ADMFLAG_GENERIC, "Show current plugin feature status" );
 
-    // Register console commands
+    // Console commands
     RCC( "sm_save",         CSaveSpawn,    "Save a spawn point" );
     RCC( "sm_sv",           CSaveSpawn,    "Save a spawn point" );
     RCC( "sm_load",         CLoadSpawn,    "Teleport to saved spawn" );
@@ -142,10 +139,11 @@ pub OnPluginStart() {
     RCC( "+sm_pt_resupply", CResupplyDn,   "Resupply inside spawn" );
     RCC( "-sm_pt_resupply", CResupplyUp,   "Resupply inside spawn" );
 
-    g_hCookieFOV = RegClientCookie( "sm_fov_cookie", "Desired client field of view", CookieAccess_Private );
-    g_hCookieInfiniteAmmo = RegClientCookie( "sm_infiniteammo_cookie", "Infinite ammo setting", CookieAccess_Private );
-    g_hCookieImmunity     = RegClientCookie( "sm_immunity_cookie", "Immunity setting", CookieAccess_Private );
+    g_hCookieFOV          = RegClientCookie( "sm_fov_cookie",          "Desired client field of view", CookieAccess_Private );
+    g_hCookieInfiniteAmmo = RegClientCookie( "sm_infiniteammo_cookie", "Infinite ammo setting",        CookieAccess_Private );
+    g_hCookieImmunity     = RegClientCookie( "sm_immunity_cookie",     "Immunity setting",             CookieAccess_Private );
 
+    // Console variables
     g_cvFOVMin      = CreateConVar( "sm_fov_min",      "70",  "Minimum client field of view", _, 1, 1.0, 1, 175.0 );
     g_cvFOVMax      = CreateConVar( "sm_fov_max",      "120", "Maximum client field of view", _, 1, 1.0, 1, 175.0 );
     g_cvRespawnTime = CreateConVar( "sm_respawn_time", "0.0", "Player respawn delay in seconds", FCVAR_NOTIFY );
@@ -160,9 +158,6 @@ pub OnPluginStart() {
     g_bTeamReadyState[0] = false;
     g_bTeamReadyState[1] = false;
     
-    // Spawn room entity outputs are now handled by direct collision detection
-    // No need to hook OnStartTouch/OnEndTouch as we use IsPlayerTouchingSpawn()
-    
     // Initialize spawn room tracking arrays
     for (i n = 1; n <= MaxClients; n++) {
         g_bIsClientInSpawn[n] = false;
@@ -171,14 +166,12 @@ pub OnPluginStart() {
         
         // Initialize spawn room entity tracking
         for (i s = 0; s < MAX_SPAWN_ROOMS; s++) {
-            g_iPlayerSpawns[n][s] = -1;  // -1 means no entity
+            g_iPlayerSpawns[n][s] = -1;
         }
     }
     
     // Initialize spawn room team tracking
-    for (i n = 0; n < 2048; n++) {
-        g_iSpawnTeam[n] = 0;  // 0 means unassigned team
-    }
+    g_iSpawnTeam[0] = 0;
     
     // Initialize saved ammo/velocity buffers
     for (i s = 0; s < MAX_SLOTS; s++) {
@@ -192,19 +185,19 @@ pub OnPluginStart() {
     
     // Initialize infinite ammo ArrayList handles and backup tracking
     for (i n = 1; n <= MaxClients; n++) {
-        g_hOriginalAmmo[n] = null;
-        g_bInfiniteAmmo[n] = false;
+        g_hOriginalAmmo[n]              = null;
+        g_bInfiniteAmmo[n]              = false;
         g_bBackupInfiniteAmmoTracked[n] = false;
-        g_bBackupImmunityTracked[n] = false;
-        g_bBackupInfiniteAmmo[n] = false;
-        g_bBackupImmunity[n] = false;
+        g_bBackupImmunityTracked[n]     = false;
+        g_bBackupInfiniteAmmo[n]        = false;
+        g_bBackupImmunity[n]            = false;
     }
     
     // Hook damage for currently connected clients and reset nodamage flags
     for (i n = 1; n <= MaxClients; n++) {
-        g_bNoDamage[n] = false;
+        g_bNoDamage[n]         = false;
         g_bPendingRestoreHP[n] = false;
-        g_iPreDamageHP[n] = 0;
+        g_iPreDamageHP[n]      = 0;
         if ( IsClientInGame(n) ) {
             SDKHook( n, SDKHook_OnTakeDamage,     Hook_OnTakeDamage );
             SDKHook( n, SDKHook_OnTakeDamagePost, Hook_OnTakeDamagePost );
@@ -214,7 +207,6 @@ pub OnPluginStart() {
 
 // OnGameFrame - replenish ammo every frame for infinite ammo players and check for buffered resupply
 pub v OnGameFrame() {
-    
     // Loop through all clients
     for ( i client = 1; client <= MaxClients; client++ ) {
         // Check if client is valid and in-game
@@ -261,11 +253,10 @@ pub v OnClientPutInServer( i client ) {
 b IsMatchActive() {
     // Match is not active if game is awaiting ready restart, timer is paused, or timer is disabled
     b awaitingReadyRestart = view_as<b>(GameRules_GetProp("m_bAwaitingReadyRestart"));
-    
-    i timerEnt = -1;
-    b timerPaused = false;
+    i timerEnt      = -1;
+    b timerPaused   = false;
     b timerDisabled = false;
-    b IsPostRound = GameRules_GetRoundState() == RoundState_TeamWin;
+    b IsPostRound   = GameRules_GetRoundState() == RoundState_TeamWin;
     
     // Find any active team_round_timer entity
     while ((timerEnt = FindEntityByClassname(timerEnt, "team_round_timer")) != -1) {
@@ -313,100 +304,6 @@ NEW_CMD(CReady) {
     PH;
 }
 
-// Delayed reply functions for Monty Python style messages
-pub v DelayedReply1(Han timer, any client) {
-    if (IsValidClient(client)) {
-        PrintToChat(client, "\x04[ADMIN] \x01But not because we think you're a bad person or anything.");
-        CreateTimer(4.0, DelayedReply2, client);
-    }
-}
-
-pub v DelayedReply2(Han timer, any client) {
-    if (IsValidClient(client)) {
-        PrintToChat(client, "\x04[ADMIN] \x01It's just that this command is what we in the business call \"a bit naughty\"");
-        CreateTimer(4.0, DelayedReply3, client);
-    }
-}
-
-pub v DelayedReply3(Han timer, any client) {
-    if (IsValidClient(client)) {
-        PrintToChat(client, "\x04[ADMIN] \x01- not in the sense of being morally wrong,");
-        CreateTimer(3.0, DelayedReply4, client);
-    }
-}
-
-pub v DelayedReply4(Han timer, any client) {
-    if (IsValidClient(client)) {
-        PrintToChat(client, "\x04[ADMIN] \x01but rather in the technical sense that it disrupts the delicate balance of player enjoyment in our fine establishment.");
-        CreateTimer(5.0, DelayedReply5, client);
-    }
-}
-
-pub v DelayedReply5(Han timer, any client) {
-    if (IsValidClient(client)) {
-        PrintToChat(client, "\x04[ADMIN] \x01This feature has been temporarily disabled to prevent what we like to call \"accidental player disruption syndrome\".");
-        CreateTimer(5.0, DelayedReply6, client);
-    }
-}
-
-pub v DelayedReply6(Han timer, any client) {
-    if (IsValidClient(client)) {
-        PrintToChat(client, "\x04[ADMIN] \x01A condition that affects well-meaning administrators who, in their quest for efficiency, sometimes overlook the social implications of their actions.");
-        CreateTimer(6.0, DelayedReply7, client);
-    }
-}
-
-pub v DelayedReply7(Han timer, any client) {
-    if (IsValidClient(client)) {
-        PrintToChat(client, "\x04[ADMIN] \x01It's nothing to be ashamed of, really.");
-        PrintToChat(client, "\x04[ADMIN] \x01Many fine admins have suffered from this condition.");
-        CreateTimer(3.0, DelayedReply8, client);
-    }
-}
-
-pub v DelayedReply8(Han timer, any client) {
-    if (IsValidClient(client)) {
-        PrintToChat(client, "\x04[ADMIN] \x01This feature has been temporarily disabled to prevent what we like to call \"accidental player disruption syndrome\".");
-        PrintToChat(client, "\x04[ADMIN] \x01A condition that affects well-meaning administrators who, in their quest for efficiency, sometimes overlook the social implications of their actions.");
-        CreateTimer(8.0, DelayedReply9, client);
-    }
-}
-
-pub v DelayedReply9(Han timer, any client) {
-    if (IsValidClient(client)) {
-        PrintToChat(client, "\x04[ADMIN] \x01It's nothing to be ashamed of, really.");
-        PrintToChat(client, "\x04[ADMIN] \x01Many fine admins have suffered from this condition.");
-        CreateTimer(3.0, DelayedReply10, client);
-    }
-}
-
-pub v DelayedReply10(Han timer, any client) {
-    if (IsValidClient(client)) {
-        PrintToChat(client, "\x04[ADMIN] \x01Many fine admins have suffered from this condition.");
-        CreateTimer(3.0, DelayedReply11, client);
-    }
-}
-
-pub v DelayedReply11(Han timer, any client) {
-    if (IsValidClient(client)) {
-        PrintToChat(client, "\x04[ADMIN] \x01Many fine admins have suffered from this condition.");
-        CreateTimer(3.0, DelayedReply12, client);
-    }
-}
-
-pub v DelayedReply12(Han timer, any client) {
-    if (IsValidClient(client)) {
-        PrintToChat(client, "\x04[ADMIN] \x01But enough dithering! What we're trying to say - and do get on with it - is that you should try a more targeted approach with specific players or different team assignments.");
-        CreateTimer(6.0, DelayedReply13, client);
-    }
-}
-
-pub v DelayedReply13(Han timer, any client) {
-    if (IsValidClient(client)) {
-        PrintToChat(client, "\x04[ADMIN] \x01It's much more sporting that way, and the players will appreciate not being dragged away from their carefully chosen teams like a knight being dragged away from his quest!");
-    }
-}
-
 // Change client's team
 NEW_CMD(CSetTeam) {
     // Parse team argument early so it's available in all code paths
@@ -416,12 +313,6 @@ NEW_CMD(CSetTeam) {
     c input_team[5];
     GetCmdArg(2, input_team, sizeof(input_team));
     TFTeam team = ParseTeam(input_team);
-    
-    // If they're trying to set everyone to spectator, deny with a funny message
-// if (StrEqual(target, "@all") && team == TFTeam_Spectator) {
-//     PrintToChat(client, "\x04[ADMIN] \x01And now for something completely different! You see, your outrageous request to set everyone to spectator has been... how do you say... DENIED!");
-//     CreateTimer(5.0, DelayedReply1, client);
-// }
     
     if ( args != 2 || team == TFTeam_Unassigned ) return EndCmd( client, "Usage: sm_setteam <#userid|name> <spec|red|blu>", args );
 
