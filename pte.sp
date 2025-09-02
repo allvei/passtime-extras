@@ -92,11 +92,11 @@ f g_vSavedSpawnOrigin[3];
 f g_vSavedSpawnAngles[3];
 f g_vSavedSpawnVelocity[3];
 
-// Emergency tournament controls
-b g_bResupplyEnabled = true;       // Global toggle for resupply functionality
+// Backup tournament controls
+b g_bResupplyEnabled       = true; // Global toggle for resupply functionality
 b g_bInstantRespawnEnabled = true; // Global toggle for instant respawn
-b g_bImmunityAmmoEnabled = true;   // Global toggle for immunity and infinite ammo
-b g_bSaveLoadEnabled = true;       // Global toggle for save/load spawn functionality
+b g_bImmunityAmmoEnabled   = true; // Global toggle for immunity and infinite ammo
+b g_bSaveLoadEnabled       = true; // Global toggle for save/load spawn functionality
 
 // Resupply failsafe system
 #define FAILSAFE_DISTANCE 512.0 // Maximum distance from spawn point in Hammer units
@@ -122,7 +122,6 @@ pub OnPluginStart() {
     RAC( "sm_enable_respawn",  CToggleRespawn,  ADMFLAG_GENERIC, "Toggle instant respawn" );
     RAC( "sm_enable_immunity", CToggleImmunity, ADMFLAG_GENERIC, "Toggle immunity and infinite ammo" );
     RAC( "sm_enable_saveload", CToggleSaveLoad, ADMFLAG_GENERIC, "Toggle save/load spawn functionality" );
-    RAC( "sm_plugin_status",   CPluginStatus,   ADMFLAG_GENERIC, "Show current plugin feature status" );
 
     // Console commands
     RCC( "sm_save",         CSaveSpawn,    "Save a spawn point" );
@@ -209,36 +208,26 @@ pub OnPluginStart() {
 pub v OnGameFrame() {
     // Loop through all clients
     for ( i client = 1; client <= MaxClients; client++ ) {
-        // Check if client is valid and in-game
-        if (IsClientInGame(client) && client <= MaxClients) {
-            // Check for infinite ammo players (excluding medics) and if globally enabled
-            if ( IsValidClient( client ) && g_bInfiniteAmmo[ client ] && g_bImmunityAmmoEnabled && !IsMatchActive()) {
-                // Ignore medics with infinite ammo
-                if (TF2_GetPlayerClass(client) == TFClass_Medic) continue;
-                
-                // Get the active weapon
-                i weapon = GetEntPropEnt( client, Prop_Send, "m_hActiveWeapon" );
-                if ( weapon == -1 || !IsValidEntity( weapon ) ) continue;
-                
-                // Replenish clip ammo to a high value (99)
-                SetEntProp( weapon, Prop_Send, "m_iClip1", 99 );
-                SetEntProp( weapon, Prop_Send, "m_iClip2", 99 );
-                
-                // Replenish reserve ammo for all ammo types
-                // TF2 has a maximum of 32 ammo types
-                for ( i ammoType = 0; ammoType < 32; ammoType++ ) {
-                    SetEntProp( client, Prop_Send, "m_iAmmo", 999, _, ammoType );
-                }
+        // Check for infinite ammo players (excluding medics) and if globally enabled
+        if ( IsValidClient( client ) && g_bInfiniteAmmo[ client ] && g_bImmunityAmmoEnabled && !IsMatchActive()) {
+            // Skip medics
+            if (TF2_GetPlayerClass(client) == TFClass_Medic) continue;
+
+            // Get the active weapon
+            i weapon = GetEntPropEnt( client, Prop_Send, "m_hActiveWeapon" );
+            if ( weapon == -1 || !IsValidEntity( weapon ) ) continue;
+
+            SetEntProp( weapon, Prop_Send, "m_iClip1", 19 );
+            SetEntProp( weapon, Prop_Send, "m_iClip2", 84 );
+
+            for ( i ammoType = 0; ammoType < 32; ammoType++ ) {
+                SetEntProp( client, Prop_Send, "m_iAmmo", 999, _, ammoType );
             }
-            
-            // Check for buffered resupply (only if globally enabled)
-            if (g_bResupplyEnabled && g_bResupplyDn[client] && !g_bResupplyUp[client]) {
-                // Check if player has entered a spawn room
-                if (IsClientInSpawn(client)) {
-                    // Resupply the player
-                    TryResupplyPlayer(client);
-                }
-            }
+        }
+
+        // Check for buffered resupply (only if globally enabled)
+        if (g_bResupplyEnabled && g_bResupplyDn[client] && !g_bResupplyUp[client] && IsClientInSpawn(client)) {
+            Resupply(client);
         }
     }
 }
@@ -268,14 +257,14 @@ b IsMatchActive() {
     }
     
     // Match is active only if we're not awaiting ready restart and timer is running (not paused and not disabled)
-    return !(awaitingReadyRestart || timerPaused || timerDisabled || IsPostRound);
+    return !(awaitingReadyRestart || timerPaused || timerDisabled || !IsPostRound);
 }
 
 // ====================================================================================================
 // COMMANDS
 // ====================================================================================================
 
-// Command to manually set a team's ready status
+// Command to set a team's ready status
 NEW_CMD(CReady) {
     if (IsMatchActive()) PCO;
     
@@ -373,7 +362,7 @@ NEW_CMD(CSetFOV) {
         IntToString( fov, cookie, sizeof( cookie ) );
         SetClientCookie( client, g_hCookieFOV, cookie );
         cookieSuccess     = true;
-        g_bSteamConnected = true;    // Steam is connected if cookies work
+        g_bSteamConnected = true; // Steam is connected if cookies work
 
         // If we were using backup system but Steam is now connected, we can disable it
         if ( g_bBackupFOVDB ) SetBackupSystem( false );
@@ -399,7 +388,6 @@ NEW_CMD(CSetFOV) {
 NEW_CMD(CSaveSpawn) {
     if (!g_bSaveLoadEnabled) return EndCmd(client, "Save/Load spawn functionality has been disabled by an administrator.");
     if (IsMatchActive()) return EndCmd(client, "Saving spawn points is disabled in match mode.");
-
     if ( args != 0 ) return EndCmd( client, "Usage: sm_save" );
     if ( client <= 0 || client > MaxClients || !IsClientInGame( client ) ) PH;
     if ( !IsPlayerAlive( client ) ) return EndCmd( client, "You must be alive to save your position." );
@@ -467,12 +455,12 @@ NEW_CMD(CLoadSpawn) {
     PH;
 }
 
-// Toggle no-damage mode: you take no damage and deal no damage (knockback still applies)
+// Toggle immunity mode: you are invulnerable and deal no damage (knockback still applies)
 NEW_CMD(CImmune) {
-    if (!g_bImmunityAmmoEnabled) return EndCmd(client, "Immunity functionality has been disabled by an administrator.");
-    if (IsMatchActive()) return EndCmd(client, "No-damage mode is disabled in match mode.");
+    if (!g_bImmunityAmmoEnabled) return EndCmd(client, "Immunity has been disabled by an administrator.");
+    if (IsMatchActive()) return EndCmd(client, "Immunity is disabled in match mode.");
 
-    if ( args > 1 ) return EndCmd( client, "Usage: sm_nodamage [0|1]" );
+    if ( args > 1 ) return EndCmd( client, "Usage: sm_immunity [0|1]" );
     
     b newValue;
     
@@ -489,12 +477,12 @@ NEW_CMD(CImmune) {
             newValue = false;
             g_bNoDamage[ client ] = false;
         } else {
-            return EndCmd( client, "Usage: sm_nodamage [0|1]" );
+            return EndCmd( client, "Usage: sm_immunity [0|1]" );
         }
     }
     
     // Save immunity setting to cookies
-    SaveImmunitySetting(client, g_bNoDamage[client]);
+    SetImmunityCookie(client, g_bNoDamage[client]);
     
     // If player is alive, force respawn to apply changes cleanly
     if ( IsPlayerAlive( client ) ) {
@@ -507,10 +495,10 @@ NEW_CMD(CImmune) {
 
 // Toggle infinite ammo mode
 NEW_CMD(CInfiniteAmmo) {
-    if (!g_bImmunityAmmoEnabled) return EndCmd(client, "Infinite ammo functionality has been disabled by an administrator.");
-    if (IsMatchActive()) return EndCmd(client, "Infinite ammo mode is disabled in match mode.");
+    if (!g_bImmunityAmmoEnabled) return EndCmd(client, "Infinite ammo has been disabled by an administrator.");
+    if (IsMatchActive()) return EndCmd(client, "Infinite ammo is disabled in match mode.");
 
-    if ( args > 1 ) return EndCmd( client, "Usage: sm_infammo [0|1]" );
+    if ( args > 1 ) return EndCmd( client, "Usage: sm_ammo [0|1]" );
     
     b oldValue = g_bInfiniteAmmo[ client ];
     
@@ -524,17 +512,17 @@ NEW_CMD(CInfiniteAmmo) {
             
             // If enabling and wasn't previously enabled, store original ammo values
             if ( !oldValue ) {
-                StoreOriginalAmmo( client );
+                SetInitAmmo( client );
             }
         } else if ( StrEqual( arg, "0" ) || StrEqual( arg, "off", false ) || StrEqual( arg, "false", false ) || StrEqual( arg, "disable", false ) ) {
             g_bInfiniteAmmo[ client ] = false;
         } else {
-            return EndCmd( client, "Usage: sm_infammo [0|1]" );
+            return EndCmd( client, "Usage: sm_ammo [0|1]" );
         }
     }
     
     // Save infinite ammo setting to cookies
-    SaveInfiniteAmmoSetting(client, g_bInfiniteAmmo[client]);
+    SetAmmoCookie(client, g_bInfiniteAmmo[client]);
     
     // If player is alive, force respawn to apply changes cleanly
     if ( IsPlayerAlive( client ) ) {
@@ -636,15 +624,15 @@ NEW_CMD(CRoundTimeDebug) {
 // EMERGENCY TOURNAMENT ADMIN COMMANDS
 // ====================================================================================================
 
-// Emergency toggle for resupply functionality
+// Backup toggle for resupply functionality
 NEW_CMD(CToggleResupply) {
-    if (args != 1) return EndCmd(client, "Usage: sm_toggle_resupply <0|1>");
+    if (args != 1) return EndCmd(client, "Usage: sm_enable_resupply <0|1>");
     
     c arg[4];
     GetCmdArg(1, arg, sizeof(arg));
     i value = StringToInt(arg);
     
-    if (value != 0 && value != 1) return EndCmd(client, "Usage: sm_toggle_resupply <0|1> (0=disable, 1=enable)");
+    if (value != 0 && value != 1) return EndCmd(client, "Usage: sm_enable_resupply <0|1> (0=disable, 1=enable)");
     
     g_bResupplyEnabled = (value != 0);
     
@@ -653,37 +641,35 @@ NEW_CMD(CToggleResupply) {
         g_bFailsafeTriggered = false;
     }
     
-    ReplyToCommand(client, "[EMERGENCY] Resupply functionality %s", g_bResupplyEnabled ? "ENABLED" : "DISABLED");
-    LogAction(client, -1, "Admin %L %s resupply functionality", client, g_bResupplyEnabled ? "enabled" : "disabled");
+    ReplyToCommand(client, "Resupply functionality %s", g_bResupplyEnabled ? "ENABLED" : "DISABLED");
     PH;
 }
 
-// Emergency toggle for instant respawn
+// Backup toggle for instant respawn
 NEW_CMD(CToggleRespawn) {
-    if (args != 1) return EndCmd(client, "Usage: sm_toggle_respawn <0|1>");
+    if (args != 1) return EndCmd(client, "Usage: sm_enable_respawn <0|1>");
     
     c arg[4];
     GetCmdArg(1, arg, sizeof(arg));
     i value = StringToInt(arg);
     
-    if (value != 0 && value != 1) return EndCmd(client, "Usage: sm_toggle_respawn <0|1> (0=disable, 1=enable)");
+    if (value != 0 && value != 1) return EndCmd(client, "Usage: sm_enable_respawn <0|1> (0=disable, 1=enable)");
     
     g_bInstantRespawnEnabled = (value != 0);
     
-    ReplyToCommand(client, "[EMERGENCY] Instant respawn %s", g_bInstantRespawnEnabled ? "ENABLED" : "DISABLED");
-    LogAction(client, -1, "Admin %L %s instant respawn", client, g_bInstantRespawnEnabled ? "enabled" : "disabled");
+    ReplyToCommand(client, "Instant respawn %s", g_bInstantRespawnEnabled ? "ENABLED" : "DISABLED");
     PH;
 }
 
-// Emergency toggle for immunity and infinite ammo
+// Backup toggle for immunity and infinite ammo
 NEW_CMD(CToggleImmunity) {
-    if (args != 1) return EndCmd(client, "Usage: sm_toggle_immunity <0|1>");
+    if (args != 1) return EndCmd(client, "Usage: sm_enable_immunity <0|1>");
     
     c arg[4];
     GetCmdArg(1, arg, sizeof(arg));
     i value = StringToInt(arg);
     
-    if (value != 0 && value != 1) return EndCmd(client, "Usage: sm_toggle_immunity <0|1> (0=disable, 1=enable)");
+    if (value != 0 && value != 1) return EndCmd(client, "Usage: sm_enable_immunity <0|1> (0=disable, 1=enable)");
     
     g_bImmunityAmmoEnabled = (value != 0);
     
@@ -701,36 +687,23 @@ NEW_CMD(CToggleImmunity) {
         }
     }
     
-    ReplyToCommand(client, "[EMERGENCY] Immunity and infinite ammo %s", g_bImmunityAmmoEnabled ? "ENABLED" : "DISABLED");
-    LogAction(client, -1, "Admin %L %s immunity and infinite ammo", client, g_bImmunityAmmoEnabled ? "enabled" : "disabled");
+    ReplyToCommand(client, "Immunity and infinite ammo %s", g_bImmunityAmmoEnabled ? "ENABLED" : "DISABLED");
     PH;
 }
 
-// Emergency toggle for save/load spawn functionality
+// Backup toggle for save/load spawn functionality
 NEW_CMD(CToggleSaveLoad) {
-    if (args != 1) return EndCmd(client, "Usage: sm_toggle_saveload <0|1>");
+    if (args != 1) return EndCmd(client, "Usage: sm_enable_saveload <0|1>");
     
     c arg[4];
     GetCmdArg(1, arg, sizeof(arg));
     i value = StringToInt(arg);
     
-    if (value != 0 && value != 1) return EndCmd(client, "Usage: sm_toggle_saveload <0|1> (0=disable, 1=enable)");
+    if (value != 0 && value != 1) return EndCmd(client, "Usage: sm_enable_saveload <0|1> (0=disable, 1=enable)");
     
     g_bSaveLoadEnabled = (value != 0);
     
-    ReplyToCommand(client, "[EMERGENCY] Save/Load spawn functionality %s", g_bSaveLoadEnabled ? "ENABLED" : "DISABLED");
-    LogAction(client, -1, "Admin %L %s save/load spawn functionality", client, g_bSaveLoadEnabled ? "enabled" : "disabled");
-    PH;
-}
-
-// Show current plugin feature status
-NEW_CMD(CPluginStatus) {
-    ReplyToCommand(client, "[PLUGIN STATUS]");
-    ReplyToCommand(client, "Resupply: %s%s", g_bResupplyEnabled ? "ENABLED" : "DISABLED", g_bFailsafeTriggered ? " (FAILSAFE TRIGGERED)" : "");
-    ReplyToCommand(client, "Instant Respawn: %s", g_bInstantRespawnEnabled ? "ENABLED" : "DISABLED");
-    ReplyToCommand(client, "Immunity/Infinite Ammo: %s", g_bImmunityAmmoEnabled ? "ENABLED" : "DISABLED");
-    ReplyToCommand(client, "Save/Load Spawn: %s", g_bSaveLoadEnabled ? "ENABLED" : "DISABLED");
-    ReplyToCommand(client, "Match Active: %s", IsMatchActive() ? "YES" : "NO");
+    ReplyToCommand(client, "Save/Load spawn functionality %s", g_bSaveLoadEnabled ? "ENABLED" : "DISABLED");
     PH;
 }
 
@@ -761,7 +734,7 @@ pub Act EPDeath( Ev event, const c[] name, b dontBroadcast ) {
     
     // Check if instant respawn is globally enabled
     if (g_bInstantRespawnEnabled && g_cvRespawnTime.FloatValue <= 0.0) {
-        RequestFrame( Respawn_Frame, userid );
+        RequestFrame( RespawnFrame, userid );
     }
     
     PCO;
@@ -797,7 +770,7 @@ NEW_EV(EPSpawn) {
 
     // Try to restore settings from cookies first
     if ( AreClientCookiesCached( client ) ) {
-        if ( RestoreFOV( client ) ) {
+        if ( GetFOVCookie( client ) ) {
             // If we were using backup but Steam is now connected, we can disable it
             if ( !g_bSteamConnected ) {
                 g_bSteamConnected = true;
@@ -806,8 +779,8 @@ NEW_EV(EPSpawn) {
         }
         
         // Restore infinite ammo and immunity settings
-        RestoreInfiniteAmmoSetting( client );
-        RestoreImmunitySetting( client );
+        GetAmmoCookie( client );
+        GetImmunityCookie( client );
         return;
     } else if ( !g_bBackupFOVDB ) {
         // Steam is down, initialize backup system
@@ -824,7 +797,7 @@ NEW_EV(EPSpawn) {
     if ( g_bBackupInfiniteAmmoTracked[ client ] ) {
         g_bInfiniteAmmo[ client ] = g_bBackupInfiniteAmmo[ client ];
         if ( g_bInfiniteAmmo[ client ] ) {
-            StoreOriginalAmmo( client );
+            SetInitAmmo( client );
         }
     }
     
@@ -864,7 +837,7 @@ SetFOV( i client, i fov ) {
 }
 
 // Retrieves the client's FOV from the cookie and applies it, returns false if invalid
-b RestoreFOV( i client ) {
+b GetFOVCookie( i client ) {
     c cookie[ 4 ];
     GetClientCookie( client, g_hCookieFOV, cookie, sizeof( cookie ) );
     i fov = StringToInt( cookie ),
@@ -917,7 +890,7 @@ SetBackupSystem( b a ) {
 }
 
 // Respawn frame callback
-pub v Respawn_Frame( any userid ) {
+pub v RespawnFrame( any userid ) {
     // Get client from userid and validate
     i client = GetClientOfUserId( userid );
     
@@ -942,7 +915,7 @@ NEW_CMD(CResupplyDn) {
     g_bResupplyUp[client] = false;
     
     // Try to resupply immediately if in spawn room
-    TryResupplyPlayer(client);
+    Resupply(client);
     
     PH;
 }
@@ -962,7 +935,7 @@ NEW_CMD(CResupplyUp) {
 }
 
 // Try to resupply a player if conditions are met
-v TryResupplyPlayer(i client) {
+v Resupply(i client) {
     // Check if resupply is globally enabled
     if (!g_bResupplyEnabled) return;
     
@@ -988,16 +961,9 @@ v TryResupplyPlayer(i client) {
     
     g_bResupplyUp[client] = true;
 }
-// Check if a player is in their own spawnroom
-b IsClientInSpawn(i client) {
-    if (!IsValidClient(client)) return false;
-    
-    // Use our new reliable spawn room detection instead of the buggy native property
-    return IsPlayerTouchingSpawnRoom(client);
-}
 
 // Check if a player is within the bounds of a brush entity
-b IsPlayerInEntityBounds(i client, i entity) {
+b IsInEntityBounds(i client, i entity) {
     if (!IsValidClient(client) || !IsValidEntity(entity)) return false;
     
     // Get player hull
@@ -1030,7 +996,7 @@ b IsPlayerInEntityBounds(i client, i entity) {
 }
 
 // Check if a player is touching any func_respawnroom entities of their own team
-b IsPlayerTouchingSpawnRoom(i client) {
+b IsClientInSpawn(i client) {
     if (!IsValidClient(client)) return false;
     
     i playerTeam = GetClientTeam(client);
@@ -1051,7 +1017,7 @@ b IsPlayerTouchingSpawnRoom(i client) {
             i spawnTeam = GetEntProp(entity, Prop_Send, "m_iTeamNum");
             if (spawnTeam == playerTeam) {
                 // Check if player is within this entity's bounds
-                if (IsPlayerInEntityBounds(client, entity)) {
+                if (IsInEntityBounds(client, entity)) {
                     g_bIsClientInSpawn[client] = true;
                     g_iPlayerSpawns[client][spawnCount] = entity;
                     spawnCount++;
@@ -1062,12 +1028,11 @@ b IsPlayerTouchingSpawnRoom(i client) {
             }
         }
     }
-    
     return g_bIsClientInSpawn[client];
 }
 
 // Get distance to nearest spawn point of player's team
-f GetDistanceToNearestSpawn(i client) {
+f GetNearestSpawnDist(i client) {
     if (!IsValidClient(client)) return 999999.0;
     
     i playerTeam = GetClientTeam(client);
@@ -1097,7 +1062,7 @@ f GetDistanceToNearestSpawn(i client) {
 
 // Check resupply failsafe - returns false if failsafe triggers
 b CheckResupplyFailsafe(i client) {
-    f distanceToSpawn = GetDistanceToNearestSpawn(client);
+    f distanceToSpawn = GetNearestSpawnDist(client);
     
     // If player is too far from nearest spawn point, trigger failsafe
     if (distanceToSpawn > FAILSAFE_DISTANCE) {
@@ -1165,13 +1130,12 @@ pub v OnClientCookiesCached( i client ) {
     if ( g_bBackupFOVDB ) SetBackupSystem( false );
 
     // Try to load from cookies
-    RestoreFOV( client );
-    RestoreInfiniteAmmoSetting( client );
-    RestoreImmunitySetting( client );
+    GetFOVCookie( client );
+    GetAmmoCookie( client );
+    GetImmunityCookie( client );
 }
 
-// Save infinite ammo setting to cookies
-v SaveInfiniteAmmoSetting(i client, b enabled) {
+v SetAmmoCookie(i client, b enabled) {
     if (AreClientCookiesCached(client)) {
         c cookie[2];
         IntToString(enabled ? 1 : 0, cookie, sizeof(cookie));
@@ -1191,8 +1155,7 @@ v SaveInfiniteAmmoSetting(i client, b enabled) {
     }
 }
 
-// Save immunity setting to cookies
-v SaveImmunitySetting(i client, b enabled) {
+v SetImmunityCookie(i client, b enabled) {
     if (AreClientCookiesCached(client)) {
         c cookie[2];
         IntToString(enabled ? 1 : 0, cookie, sizeof(cookie));
@@ -1213,7 +1176,7 @@ v SaveImmunitySetting(i client, b enabled) {
 }
 
 // Restore infinite ammo setting from cookies
-b RestoreInfiniteAmmoSetting(i client) {
+b GetAmmoCookie(i client) {
     c cookie[2];
     GetClientCookie(client, g_hCookieInfiniteAmmo, cookie, sizeof(cookie));
     
@@ -1230,14 +1193,14 @@ b RestoreInfiniteAmmoSetting(i client) {
     
     // Store original ammo if enabling
     if (enabled && IsValidClient(client)) {
-        StoreOriginalAmmo(client);
+        SetInitAmmo(client);
     }
     
     return true;
 }
 
 // Restore immunity setting from cookies
-b RestoreImmunitySetting(i client) {
+b GetImmunityCookie(i client) {
     c cookie[2];
     GetClientCookie(client, g_hCookieImmunity, cookie, sizeof(cookie));
     
@@ -1256,7 +1219,7 @@ b RestoreImmunitySetting(i client) {
 }
 
 // Store original ammo values for a client
-pub v StoreOriginalAmmo( i client ) {
+pub v SetInitAmmo( i client ) {
     // Clean up existing ArrayList if it exists
     if (g_hOriginalAmmo[client] != null) {
         delete g_hOriginalAmmo[client];
@@ -1280,7 +1243,7 @@ pub v StoreOriginalAmmo( i client ) {
 }
 
 // Restore original ammo values for a client
-pub v RestoreOriginalAmmo( i client ) {
+pub v GetInitAmmo( i client ) {
     // Check if player has stored ammo data
     if (g_hOriginalAmmo[client] == null) return;
     
@@ -1302,23 +1265,15 @@ pub v RestoreOriginalAmmo( i client ) {
 pub Act Hook_OnTakeDamage( i victim, i &attacker, i &inflictor, f &damage, i &damagetype, i &weapon, f damageForce[3], f damagePosition[3], i damagecustom ) {
     if (IsMatchActive()) PCO;
     
-    // If the victim is invulnerable: allow knockback by letting damage go through, but prevent death and restore HP afterward
     if ( victim >= 1 && victim <= MaxClients && g_bNoDamage[ victim ] ) {
-        // Store current health for restoration
         g_iPreDamageHP[ victim ] = GetClientHealth( victim );
         g_bPendingRestoreHP[ victim ] = true;
         
-        // Allow damage to go through for knockback calculation
-        // We'll restore health in the post-damage hook
-        
-        // If player has very low health, ensure they don't die
-        if ( g_iPreDamageHP[ victim ] <= 1 ) {
-            // For extremely low health, we still need minimal damage for knockback
-            damage = 1.0;
+        if ( g_iPreDamageHP[ victim ] <= damage ) {
+            damage--;
         }
         PCH;
     }
-    // If the attacker is invulnerable: their hits do no damage
     if ( attacker >= 1 && attacker <= MaxClients && g_bNoDamage[ attacker ] ) {
         if ( damage > 0.0 ) damage = 0.0;
         PCH;
@@ -1326,14 +1281,12 @@ pub Act Hook_OnTakeDamage( i victim, i &attacker, i &inflictor, f &damage, i &da
     PCO;
 }
 
-// Post-damage hook (reserved for future use, e.g., preserving knockback if needed)
 pub v Hook_OnTakeDamagePost( i victim, i attacker, i inflictor, f damage, i damagetype, i weapon, f damageForce[3], f damagePosition[3], i damagecustom ) {
     if (IsMatchActive()) return;
     
     if ( victim >= 1 && victim <= MaxClients && g_bPendingRestoreHP[ victim ] ) {
         g_bPendingRestoreHP[ victim ] = false;
         if ( IsClientInGame( victim ) && IsPlayerAlive( victim ) ) {
-            // Restore health to pre-damage value
             SetEntProp( victim, Prop_Send, "m_iHealth", g_iPreDamageHP[ victim ] );
         }
     }
