@@ -209,7 +209,7 @@ pub v OnGameFrame() {
     // Loop through all clients
     for ( i client = 1; client <= MaxClients; client++ ) {
         // Check for infinite ammo players (excluding medics) and if globally enabled
-        if ( IsValidClient( client ) && g_bInfiniteAmmo[ client ] && g_bImmunityAmmoEnabled && !IsMatchActive()) {
+        if ( IsValidClient( client ) && g_bInfiniteAmmo[ client ] && g_bImmunityAmmoEnabled && !IsMatch()) {
             // Skip medics
             if (TF2_GetPlayerClass(client) == TFClass_Medic) continue;
 
@@ -238,7 +238,7 @@ pub v OnClientPutInServer( i client ) {
     SDKHook( client, SDKHook_OnTakeDamagePost, Hook_OnTakeDamagePost );
 }
 
-b IsMatchActive() {
+b IsMatch() {
     // Match is not active if game is awaiting ready restart, timer is paused, or timer is disabled
     b awaitingReadyRestart = view_as<b>(GameRules_GetProp("m_bAwaitingReadyRestart"));
     i timerEnt      = -1;
@@ -265,7 +265,7 @@ b IsMatchActive() {
 
 // Command to set a team's ready status
 NEW_CMD(CReady) {
-    if (IsMatchActive()) PCO;
+    if (IsMatch()) PCO;
     
     if ( args != 2 ) return EndCmd( client, "Usage: sm_ready <red|blu> <0|1>" );
 
@@ -385,9 +385,9 @@ NEW_CMD(CSetFOV) {
 
 // Save a spawn point
 NEW_CMD(CSaveSpawn) {
-    if ( !g_bSaveLoadEnabled ) return EndCmd(client, "Save/Load spawn functionality has been disabled by an administrator.");
-    if ( IsMatchActive() ) return EndCmd(client, "Saving spawn points is disabled in match mode.");
-    if ( args != 0 ) return EndCmd( client, "Usage: sm_save" );
+    if ( !g_bSaveLoadEnabled ) return EndCmd( client, "Save/Load spawn functionality has been disabled by an administrator.");
+    if ( IsMatch() )           return EndCmd( client, "Saving spawn points is disabled in match mode.");
+    if ( args != 0 )           return EndCmd( client, "Usage: sm_save" );
     if ( client <= 0 || client > MaxClients || !IsClientInGame( client ) ) PH;
     if ( !IsPlayerAlive( client ) ) PH;
 
@@ -426,7 +426,7 @@ NEW_CMD(CSaveSpawn) {
 
 // Load (teleport) to saved spawn
 NEW_CMD(CLoadSpawn) {
-    if ( IsMatchActive() || !g_bSaveLoadEnabled ) return EndCmd(client, "Loading is disabled.");
+    if ( IsMatch() || !g_bSaveLoadEnabled ) return EndCmd(client, "Loading is disabled.");
     if ( !IsValidClient( client ) ) PH;
     if ( args != 0 ) return EndCmd( client, "Usage: sm_load" );
     if ( !g_bSavedSpawnValid ) return EndCmd( client, "No saved spawn point set yet." );
@@ -452,7 +452,7 @@ NEW_CMD(CLoadSpawn) {
 
 // Toggle immunity
 NEW_CMD(CImmune) {
-    if (IsMatchActive() || !g_bImmunityAmmoEnabled) return EndCmd(client, "Immunity is disabled.");
+    if (IsMatch() || !g_bImmunityAmmoEnabled) return EndCmd(client, "Immunity is disabled.");
     if ( args == 0 ) g_bImmunity[ client ] = !g_bImmunity[ client ];
     else return EndCmd( client, "Usage: sm_immunity" );
     
@@ -466,7 +466,7 @@ NEW_CMD(CImmune) {
 
 // Toggle infinite ammo
 NEW_CMD(CInfiniteAmmo) {
-    if (IsMatchActive() || !g_bImmunityAmmoEnabled) return EndCmd(client, "Infinite ammo is disabled.");
+    if (IsMatch() || !g_bImmunityAmmoEnabled) return EndCmd(client, "Infinite ammo is disabled.");
     if ( args == 0 ) g_bInfiniteAmmo[ client ] = !g_bInfiniteAmmo[ client ];
     else return EndCmd( client, "Usage: sm_ammo" );
     
@@ -667,7 +667,7 @@ pub Act EPDeath( Ev event, const c[] name, b dontBroadcast ) {
     i userid = event.GetInt( "userid" );
     i client = GetClientOfUserId(userid);
     
-    if (IsMatchActive()) PCO;
+    if (IsMatch()) PCO;
     
     // Validate client before proceeding
     if (client <= 0 || client > MaxClients || !IsClientInGame(client)) PCO;
@@ -1196,7 +1196,7 @@ pub v GetInitAmmo( i client ) {
 
 // SDKHooks damage filter: prevent/zero damage if victim is protected or attacker is restricted
 pub Act Hook_OnTakeDamage( i victim, i &attacker, i &inflictor, f &damage, i &damagetype, i &weapon, f damageForce[3], f damagePosition[3], i damagecustom ) {
-    if (IsMatchActive()) PCO;
+    if (IsMatch()) PCO;
     
     if ( victim >= 1 && victim <= MaxClients && g_bImmunity[ victim ] ) {
         g_iPreDamageHP[ victim ] = GetClientHealth( victim );
@@ -1215,7 +1215,7 @@ pub Act Hook_OnTakeDamage( i victim, i &attacker, i &inflictor, f &damage, i &da
 }
 
 pub v Hook_OnTakeDamagePost( i victim, i attacker, i inflictor, f damage, i damagetype, i weapon, f damageForce[3], f damagePosition[3], i damagecustom ) {
-    if (IsMatchActive()) return;
+    if (IsMatch()) return;
     
     if ( victim >= 1 && victim <= MaxClients && g_bPendingRestoreHP[ victim ] ) {
         g_bPendingRestoreHP[ victim ] = false;
