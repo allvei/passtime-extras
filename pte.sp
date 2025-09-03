@@ -14,9 +14,13 @@
 #pragma semicolon 1
 
 // Constants
-#define RED         0
-#define BLU         1
-#define TEAM_OFFSET 2
+#define RED             0
+#define BLU             1
+#define TEAM_OFFSET     2
+#define EDICT           2048
+#define MAX_SPAWN_ROOMS 4
+#define MAX_SLOTS       2
+#define RESUPDIST       512.0 // Max dist from spawn resupply can be used
 
 // MACROS
 #define PCH return Plugin_Changed
@@ -37,6 +41,7 @@
 #define NEW_CMD(%1) pub Act %1( i client, i args )
 #define NEW_EV_ACT(%1) pub Act %1( Ev event, const c[] name, b dontBroadcast )
 #define NEW_EV(%1) pub %1( Ev event, const c[] name, b dontBroadcast )
+#define STRBOOL "<0|1>"
 
 public Plugin myinfo = {
     name        = "passtime.tf extras",
@@ -61,20 +66,19 @@ i g_iPlayerFOV[     MAXPLAYERS + 1 ]; // Store FOV values for each player
 
 // Backup system for infinite ammo and immunity when Steam is down
 b g_bBackupInfiniteAmmoTracked[MAXPLAYERS + 1]; // Track if we have infinite ammo setting for this player
-b g_bBackupImmunityTracked[MAXPLAYERS + 1];     // Track if we have immunity setting for this player
-b g_bBackupInfiniteAmmo[MAXPLAYERS + 1];        // Store infinite ammo setting for each player
-b g_bBackupImmunity[MAXPLAYERS + 1];            // Store immunity setting for each player
+b g_bBackupImmunityTracked[    MAXPLAYERS + 1]; // Track if we have immunity setting for this player
+b g_bBackupInfiniteAmmo[       MAXPLAYERS + 1]; // Store infinite ammo setting for each player
+b g_bBackupImmunity[           MAXPLAYERS + 1]; // Store immunity setting for each player
 
 // Spawn room tracking
-b g_bIsClientInSpawn[MAXPLAYERS + 1];               // Track if player is in any spawn room
-#define MAX_SPAWN_ROOMS 8                           // Maximum number of spawn rooms a player can touch simultaneously
-i g_iPlayerSpawns[MAXPLAYERS + 1][MAX_SPAWN_ROOMS]; // Track which spawn rooms a player is in
-i g_iSpawnTeam[2048];                               // Track which team a spawn room belongs to (entity index -> team)
-b g_bResupplyDn[MAXPLAYERS + 1];                    // Track if resupply key is currently down
-b g_bResupplyUp[MAXPLAYERS + 1];                    // Track if resupply has been used during current key press
+b g_bIsClientInSpawn[MAXPLAYERS + 1];                  // Track if player is in any spawn room
+i g_iPlayerSpawns[   MAXPLAYERS + 1][MAX_SPAWN_ROOMS]; // Track which spawn rooms a player is in
+i g_iSpawnTeam[      EDICT];                           // Track which team a spawn room belongs to (entity index -> team)
+b g_bResupplyDn[     MAXPLAYERS + 1];                  // Track if resupply key is currently down
+b g_bResupplyUp[     MAXPLAYERS + 1];                  // Track if resupply has been used during current key press
 
 // No-damage & infinite ammo toggle per player
-b g_bNoDamage[MAXPLAYERS + 1];
+b g_bImmunity[MAXPLAYERS + 1];
 i g_iPreDamageHP[MAXPLAYERS + 1];
 b g_bPendingRestoreHP[MAXPLAYERS + 1];
 b g_bInfiniteAmmo[MAXPLAYERS + 1];
@@ -88,24 +92,21 @@ b g_bTeamReadyState[2] = { false, false }; // Track ready state for RED and BLU
 
 // Saved spawn point (admin tools)
 b g_bSavedSpawnValid = false;
-f g_vSavedSpawnOrigin[3];
-f g_vSavedSpawnAngles[3];
-f g_vSavedSpawnVelocity[3];
+f g_vSavePos[3];
+f g_vSaveAng[3];
+f g_vSaveVel[3];
 
 // Backup tournament controls
-b g_bResupplyEnabled       = true; // Global toggle for resupply functionality
-b g_bInstantRespawnEnabled = true; // Global toggle for instant respawn
-b g_bImmunityAmmoEnabled   = true; // Global toggle for immunity and infinite ammo
-b g_bSaveLoadEnabled       = true; // Global toggle for save/load spawn functionality
+b g_bResupplyEnabled       = true;
+b g_bInstantRespawnEnabled = true;
+b g_bImmunityAmmoEnabled   = true;
+b g_bSaveLoadEnabled       = true;
 
-// Resupply failsafe system
-#define FAILSAFE_DISTANCE 512.0 // Maximum distance from spawn point in Hammer units
 b g_bFailsafeTriggered = false; // Track if failsafe has been triggered
 
-#define MAX_SLOTS 6
-i g_iSavedClip1[MAX_SLOTS];
-i g_iSavedClip2[MAX_SLOTS];
-i g_iSavedAmmoType[MAX_SLOTS][2];
+i g_iSavedClip1[    MAX_SLOTS];
+i g_iSavedClip2[    MAX_SLOTS];
+i g_iSavedAmmoType[ MAX_SLOTS][2];
 i g_iSavedAmmoCount[MAX_SLOTS][2];
 
 pub OnPluginStart() {
@@ -194,7 +195,7 @@ pub OnPluginStart() {
     
     // Hook damage for currently connected clients and reset nodamage flags
     for (i n = 1; n <= MaxClients; n++) {
-        g_bNoDamage[n]         = false;
+        g_bImmunity[n]         = false;
         g_bPendingRestoreHP[n] = false;
         g_iPreDamageHP[n]      = 0;
         if ( IsClientInGame(n) ) {
@@ -204,7 +205,6 @@ pub OnPluginStart() {
     }
 }
 
-// OnGameFrame - replenish ammo every frame for infinite ammo players and check for buffered resupply
 pub v OnGameFrame() {
     // Loop through all clients
     for ( i client = 1; client <= MaxClients; client++ ) {
@@ -237,7 +237,6 @@ pub v OnClientPutInServer( i client ) {
     SDKHook( client, SDKHook_OnTakeDamage,     Hook_OnTakeDamage );
     SDKHook( client, SDKHook_OnTakeDamagePost, Hook_OnTakeDamagePost );
 }
-
 
 b IsMatchActive() {
     // Match is not active if game is awaiting ready restart, timer is paused, or timer is disabled
@@ -384,18 +383,17 @@ NEW_CMD(CSetFOV) {
     PH;
 }
 
-// Save a spawn point (global) - allowed only when round is inactive
+// Save a spawn point
 NEW_CMD(CSaveSpawn) {
-    if (!g_bSaveLoadEnabled) return EndCmd(client, "Save/Load spawn functionality has been disabled by an administrator.");
-    if (IsMatchActive()) return EndCmd(client, "Saving spawn points is disabled in match mode.");
+    if ( !g_bSaveLoadEnabled ) return EndCmd(client, "Save/Load spawn functionality has been disabled by an administrator.");
+    if ( IsMatchActive() ) return EndCmd(client, "Saving spawn points is disabled in match mode.");
     if ( args != 0 ) return EndCmd( client, "Usage: sm_save" );
     if ( client <= 0 || client > MaxClients || !IsClientInGame( client ) ) PH;
-    if ( !IsPlayerAlive( client ) ) return EndCmd( client, "You must be alive to save your position." );
+    if ( !IsPlayerAlive( client ) ) PH;
 
-    GetClientAbsOrigin( client, g_vSavedSpawnOrigin );
-    GetClientEyeAngles( client,  g_vSavedSpawnAngles );
-    // Save current velocity
-    GetEntPropVector( client, Prop_Data, "m_vecAbsVelocity", g_vSavedSpawnVelocity );
+    GetClientAbsOrigin( client,  g_vSavePos );
+    GetClientEyeAngles( client,  g_vSaveAng );
+    GetEntPropVector( client, Prop_Data, "m_vecAbsVelocity", g_vSaveVel );
     
     // Save current ammo and clips for carried weapons
     for ( i s = 0; s < MAX_SLOTS; s++ ) {
@@ -421,22 +419,19 @@ NEW_CMD(CSaveSpawn) {
     }
     g_bSavedSpawnValid = true;
 
-    EndCmd( client, "Saved spawn at (%.1f %.1f %.1f)", g_vSavedSpawnOrigin[0], g_vSavedSpawnOrigin[1], g_vSavedSpawnOrigin[2] );
+    EndCmd( client, "Spawn saved!" );
     
     PH;
 }
 
-// Load (teleport) to saved spawn - allowed only when round is inactive
+// Load (teleport) to saved spawn
 NEW_CMD(CLoadSpawn) {
-    if (!g_bSaveLoadEnabled) return EndCmd(client, "Save/Load spawn functionality has been disabled by an administrator.");
-    if (IsMatchActive()) return EndCmd(client, "Loading spawn points is disabled in match mode.");
-
+    if ( IsMatchActive() || !g_bSaveLoadEnabled ) return EndCmd(client, "Loading is disabled.");
+    if ( !IsValidClient( client ) ) PH;
     if ( args != 0 ) return EndCmd( client, "Usage: sm_load" );
     if ( !g_bSavedSpawnValid ) return EndCmd( client, "No saved spawn point set yet." );
-    if ( client <= 0 || client > MaxClients || !IsClientInGame( client ) ) PH;
-    if ( !IsPlayerAlive( client ) ) return EndCmd( client, "You must be alive to use this." );
 
-    TeleportEntity( client, g_vSavedSpawnOrigin, g_vSavedSpawnAngles, g_vSavedSpawnVelocity );
+    TeleportEntity( client, g_vSavePos, g_vSaveAng, g_vSaveVel );
     
     // Restore ammo and clips for current carried weapons
     for ( i s = 0; s < MAX_SLOTS; s++ ) {
@@ -455,81 +450,31 @@ NEW_CMD(CLoadSpawn) {
     PH;
 }
 
-// Toggle immunity mode: you are invulnerable and deal no damage (knockback still applies)
+// Toggle immunity
 NEW_CMD(CImmune) {
-    if (!g_bImmunityAmmoEnabled) return EndCmd(client, "Immunity has been disabled by an administrator.");
-    if (IsMatchActive()) return EndCmd(client, "Immunity is disabled in match mode.");
-
-    if ( args > 1 ) return EndCmd( client, "Usage: sm_immunity [0|1]" );
+    if (IsMatchActive() || !g_bImmunityAmmoEnabled) return EndCmd(client, "Immunity is disabled.");
+    if ( args == 0 ) g_bImmunity[ client ] = !g_bImmunity[ client ];
+    else return EndCmd( client, "Usage: sm_immunity" );
     
-    b newValue;
+    SetImmunityCookie(client, g_bImmunity[client]);
     
-    if ( args == 0 ) {
-        newValue = !g_bNoDamage[ client ];
-        g_bNoDamage[ client ] = newValue;
-    } else {
-        c arg[ 12 ];
-        GetCmdArg( 1, arg, sizeof( arg ) );
-        if ( StrEqual( arg, "1" ) || StrEqual( arg, "on", false ) || StrEqual( arg, "true", false ) || StrEqual( arg, "enable", false ) ) {
-            newValue = true;
-            g_bNoDamage[ client ] = true;
-        } else if ( StrEqual( arg, "0" ) || StrEqual( arg, "off", false ) || StrEqual( arg, "false", false ) || StrEqual( arg, "disable", false ) ) {
-            newValue = false;
-            g_bNoDamage[ client ] = false;
-        } else {
-            return EndCmd( client, "Usage: sm_immunity [0|1]" );
-        }
-    }
+    if ( IsPlayerAlive( client ) ) TF2_RespawnPlayer( client );
     
-    // Save immunity setting to cookies
-    SetImmunityCookie(client, g_bNoDamage[client]);
-    
-    // If player is alive, force respawn to apply changes cleanly
-    if ( IsPlayerAlive( client ) ) {
-        TF2_RespawnPlayer( client );
-    }
-    
-    ReplyToCommand( client, "No-damage %s.", g_bNoDamage[ client ] ? "ENABLED" : "DISABLED" );
+    ReplyToCommand( client, "Immunity %s.", g_bImmunity[ client ] ? "enabled" : "disabled" );
     PH;
 }
 
-// Toggle infinite ammo mode
+// Toggle infinite ammo
 NEW_CMD(CInfiniteAmmo) {
-    if (!g_bImmunityAmmoEnabled) return EndCmd(client, "Infinite ammo has been disabled by an administrator.");
-    if (IsMatchActive()) return EndCmd(client, "Infinite ammo is disabled in match mode.");
-
-    if ( args > 1 ) return EndCmd( client, "Usage: sm_ammo [0|1]" );
+    if (IsMatchActive() || !g_bImmunityAmmoEnabled) return EndCmd(client, "Infinite ammo is disabled.");
+    if ( args == 0 ) g_bInfiniteAmmo[ client ] = !g_bInfiniteAmmo[ client ];
+    else return EndCmd( client, "Usage: sm_ammo" );
     
-    b oldValue = g_bInfiniteAmmo[ client ];
-    
-    if ( args == 0 ) {
-        g_bInfiniteAmmo[ client ] = !g_bInfiniteAmmo[ client ];
-    } else {
-        c arg[ 12 ];
-        GetCmdArg( 1, arg, sizeof( arg ) );
-        if ( StrEqual( arg, "1" ) || StrEqual( arg, "on", false ) || StrEqual( arg, "true", false ) || StrEqual( arg, "enable", false ) ) {
-            g_bInfiniteAmmo[ client ] = true;
-            
-            // If enabling and wasn't previously enabled, store original ammo values
-            if ( !oldValue ) {
-                SetInitAmmo( client );
-            }
-        } else if ( StrEqual( arg, "0" ) || StrEqual( arg, "off", false ) || StrEqual( arg, "false", false ) || StrEqual( arg, "disable", false ) ) {
-            g_bInfiniteAmmo[ client ] = false;
-        } else {
-            return EndCmd( client, "Usage: sm_ammo [0|1]" );
-        }
-    }
-    
-    // Save infinite ammo setting to cookies
     SetAmmoCookie(client, g_bInfiniteAmmo[client]);
     
-    // If player is alive, force respawn to apply changes cleanly
-    if ( IsPlayerAlive( client ) ) {
-        TF2_RespawnPlayer( client );
-    }
+    if ( IsPlayerAlive( client ) ) TF2_RespawnPlayer( client );
     
-    ReplyToCommand( client, "Infinite ammo %s.", g_bInfiniteAmmo[ client ] ? "ENABLED" : "DISABLED" );
+    ReplyToCommand( client, "Infinite ammo %s.", g_bInfiniteAmmo[ client ] ? "enabled" : "disabled" );
     PH;
 }
 
@@ -580,7 +525,13 @@ NEW_CMD(CSetClass) {
     PH;
 }
 
-// Debug: print team_round_timer state
+TFClassType ParseClass( c[] s ) {
+    if ( StrEqual( s, "soldier" )  || StrEqual( s, "2" ) ) return TFClass_Soldier;
+    if ( StrEqual( s, "demo" )     || StrEqual( s, "demoman" ) || StrEqual( s, "4" ) ) return TFClass_DemoMan;
+    if ( StrEqual( s, "medic" )    || StrEqual( s, "7" ) ) return TFClass_Medic;
+    return TFClass_Unknown;
+}
+
 NEW_CMD(CRoundTimeDebug) {
     i ent = -1;
     i found = 0;
@@ -621,10 +572,10 @@ NEW_CMD(CRoundTimeDebug) {
 }
 
 // ====================================================================================================
-// EMERGENCY TOURNAMENT ADMIN COMMANDS
+// BACKUP COMMANDS
 // ====================================================================================================
 
-// Backup toggle for resupply functionality
+// Backup toggle for resupply
 NEW_CMD(CToggleResupply) {
     if (args != 1) return EndCmd(client, "Usage: sm_enable_resupply <0|1>");
     
@@ -653,11 +604,11 @@ NEW_CMD(CToggleRespawn) {
     GetCmdArg(1, arg, sizeof(arg));
     i value = StringToInt(arg);
     
-    if (value != 0 && value != 1) return EndCmd(client, "Usage: sm_enable_respawn <0|1> (0=disable, 1=enable)");
+    if (value != 0 && value != 1) return EndCmd(client, "Usage: sm_enable_respawn <0|1>");
     
     g_bInstantRespawnEnabled = (value != 0);
     
-    ReplyToCommand(client, "Instant respawn %s", g_bInstantRespawnEnabled ? "ENABLED" : "DISABLED");
+    ReplyToCommand(client, "Instant respawn %s", g_bInstantRespawnEnabled ? "enabled" : "disabled");
     PH;
 }
 
@@ -677,7 +628,7 @@ NEW_CMD(CToggleImmunity) {
     if (!g_bImmunityAmmoEnabled) {
         for (i n = 1; n <= MaxClients; n++) {
             if (IsClientInGame(n)) {
-                g_bNoDamage[n] = false;
+                g_bImmunity[n] = false;
                 g_bInfiniteAmmo[n] = false;
                 if (g_hOriginalAmmo[n] != null) {
                     delete g_hOriginalAmmo[n];
@@ -691,7 +642,7 @@ NEW_CMD(CToggleImmunity) {
     PH;
 }
 
-// Backup toggle for save/load spawn functionality
+// Backup toggle for save/load
 NEW_CMD(CToggleSaveLoad) {
     if (args != 1) return EndCmd(client, "Usage: sm_enable_saveload <0|1>");
     
@@ -705,17 +656,6 @@ NEW_CMD(CToggleSaveLoad) {
     
     ReplyToCommand(client, "Save/Load spawn functionality %s", g_bSaveLoadEnabled ? "ENABLED" : "DISABLED");
     PH;
-}
-
-// Start match command
-
-
-// Parse class from string
-TFClassType ParseClass( c[] s ) {
-    if ( StrEqual( s, "soldier" )  || StrEqual( s, "2" ) ) return TFClass_Soldier;
-    if ( StrEqual( s, "demo" )     || StrEqual( s, "demoman" ) || StrEqual( s, "4" ) ) return TFClass_DemoMan;
-    if ( StrEqual( s, "medic" )    || StrEqual( s, "7" ) ) return TFClass_Medic;
-    return TFClass_Unknown;
 }
 
 // ====================================================================================================
@@ -802,7 +742,7 @@ NEW_EV(EPSpawn) {
     }
     
     if ( g_bBackupImmunityTracked[ client ] ) {
-        g_bNoDamage[ client ] = g_bBackupImmunity[ client ];
+        g_bImmunity[ client ] = g_bBackupImmunity[ client ];
     }
 }
 
@@ -1065,7 +1005,7 @@ b CheckResupplyFailsafe(i client) {
     f distanceToSpawn = GetNearestSpawnDist(client);
     
     // If player is too far from nearest spawn point, trigger failsafe
-    if (distanceToSpawn > FAILSAFE_DISTANCE) {
+    if (distanceToSpawn > RESUPDIST) {
         g_bFailsafeTriggered = true;
         g_bResupplyEnabled = false;
         
@@ -1074,12 +1014,12 @@ b CheckResupplyFailsafe(i client) {
         GetClientName(client, playerName, sizeof(playerName));
         
         // Notify all players
-        PrintToChatAll("\x07FF4500[FAILSAFE] \x01Resupply exploit detected! Player %s was %.1f units from spawn (max: %.1f)", playerName, distanceToSpawn, FAILSAFE_DISTANCE);
+        PrintToChatAll("\x07FF4500[FAILSAFE] \x01Resupply exploit detected! Player %s was %.1f units from spawn (max: %.1f)", playerName, distanceToSpawn, RESUPDIST);
         PrintToChatAll("\x07FF4500[FAILSAFE] \x01Instant resupply has been automatically disabled.");
         PrintToChatAll("\x07FF4500[FAILSAFE] \x01Admins can re-enable with: \x07FFFF00sm_enable_resupply 1");
         
         // Log the event
-        LogMessage("Resupply failsafe triggered by %L - distance %.1f > %.1f", client, distanceToSpawn, FAILSAFE_DISTANCE);
+        LogMessage("Resupply failsafe triggered by %L - distance %.1f > %.1f", client, distanceToSpawn, RESUPDIST);
         
         return false;
     }
@@ -1093,7 +1033,7 @@ pub OnClientDisconnect(i client) {
     g_bIsClientInSpawn[client]  = false;
     g_bResupplyDn[client]  = false;
     g_bResupplyUp[client]     = false;
-    g_bNoDamage[client]         = false;
+    g_bImmunity[client]         = false;
     g_bPendingRestoreHP[client] = false;
     g_iPreDamageHP[client]      = 0;
     g_bInfiniteAmmo[client]     = false;
@@ -1154,28 +1094,6 @@ v SetAmmoCookie(i client, b enabled) {
         g_bBackupInfiniteAmmoTracked[client] = true;
     }
 }
-
-v SetImmunityCookie(i client, b enabled) {
-    if (AreClientCookiesCached(client)) {
-        c cookie[2];
-        IntToString(enabled ? 1 : 0, cookie, sizeof(cookie));
-        SetClientCookie(client, g_hCookieImmunity, cookie);
-        g_bSteamConnected = true;
-        
-        // If we were using backup system but Steam is now connected, we can disable it
-        if (g_bBackupFOVDB) SetBackupSystem(false);
-    } else {
-        // Steam is down, use backup system
-        if (!g_bBackupFOVDB) SetBackupSystem(true);
-        g_bSteamConnected = false;
-        
-        // Store in backup system
-        g_bBackupImmunity[client] = enabled;
-        g_bBackupImmunityTracked[client] = true;
-    }
-}
-
-// Restore infinite ammo setting from cookies
 b GetAmmoCookie(i client) {
     c cookie[2];
     GetClientCookie(client, g_hCookieInfiniteAmmo, cookie, sizeof(cookie));
@@ -1199,7 +1117,25 @@ b GetAmmoCookie(i client) {
     return true;
 }
 
-// Restore immunity setting from cookies
+v SetImmunityCookie(i client, b enabled) {
+    if (AreClientCookiesCached(client)) {
+        c cookie[2];
+        IntToString(enabled ? 1 : 0, cookie, sizeof(cookie));
+        SetClientCookie(client, g_hCookieImmunity, cookie);
+        g_bSteamConnected = true;
+        
+        // If we were using backup system but Steam is now connected, we can disable it
+        if (g_bBackupFOVDB) SetBackupSystem(false);
+    } else {
+        // Steam is down, use backup system
+        if (!g_bBackupFOVDB) SetBackupSystem(true);
+        g_bSteamConnected = false;
+        
+        // Store in backup system
+        g_bBackupImmunity[client] = enabled;
+        g_bBackupImmunityTracked[client] = true;
+    }
+}
 b GetImmunityCookie(i client) {
     c cookie[2];
     GetClientCookie(client, g_hCookieImmunity, cookie, sizeof(cookie));
@@ -1207,7 +1143,7 @@ b GetImmunityCookie(i client) {
     if (strlen(cookie) == 0) return false; // No saved setting
     
     b enabled = (StringToInt(cookie) != 0);
-    g_bNoDamage[client] = enabled;
+    g_bImmunity[client] = enabled;
     
     // If backup system is active, update it with cookie value
     if (g_bBackupFOVDB) {
@@ -1218,7 +1154,6 @@ b GetImmunityCookie(i client) {
     return true;
 }
 
-// Store original ammo values for a client
 pub v SetInitAmmo( i client ) {
     // Clean up existing ArrayList if it exists
     if (g_hOriginalAmmo[client] != null) {
@@ -1241,8 +1176,6 @@ pub v SetInitAmmo( i client ) {
         g_hOriginalAmmo[client].Set(ammoType + 2, GetEntProp( client, Prop_Send, "m_iAmmo", _, ammoType ));
     }
 }
-
-// Restore original ammo values for a client
 pub v GetInitAmmo( i client ) {
     // Check if player has stored ammo data
     if (g_hOriginalAmmo[client] == null) return;
@@ -1265,7 +1198,7 @@ pub v GetInitAmmo( i client ) {
 pub Act Hook_OnTakeDamage( i victim, i &attacker, i &inflictor, f &damage, i &damagetype, i &weapon, f damageForce[3], f damagePosition[3], i damagecustom ) {
     if (IsMatchActive()) PCO;
     
-    if ( victim >= 1 && victim <= MaxClients && g_bNoDamage[ victim ] ) {
+    if ( victim >= 1 && victim <= MaxClients && g_bImmunity[ victim ] ) {
         g_iPreDamageHP[ victim ] = GetClientHealth( victim );
         g_bPendingRestoreHP[ victim ] = true;
         
@@ -1274,7 +1207,7 @@ pub Act Hook_OnTakeDamage( i victim, i &attacker, i &inflictor, f &damage, i &da
         }
         PCH;
     }
-    if ( attacker >= 1 && attacker <= MaxClients && g_bNoDamage[ attacker ] ) {
+    if ( attacker >= 1 && attacker <= MaxClients && g_bImmunity[ attacker ] ) {
         if ( damage > 0.0 ) damage = 0.0;
         PCH;
     }
