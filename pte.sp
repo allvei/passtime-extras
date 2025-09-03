@@ -27,6 +27,7 @@
 #define PCO return Plugin_Continue
 #define PH  return Plugin_Handled
 #define pub public
+#define as  view_as
 #define Act Action
 #define Han Handle
 #define Ev  Event
@@ -35,13 +36,14 @@
 #define f   float
 #define b   bool
 #define c   char
-#define RCC RegConsoleCmd
-#define RAC RegAdminCmd
-#define HE  HookEvent
+#define Reply ReplyToCommand
+#define RCC   RegConsoleCmd
+#define RAC   RegAdminCmd
+#define HE    HookEvent
 #define NEW_CMD(%1) pub Act %1( i client, i args )
 #define NEW_EV_ACT(%1) pub Act %1( Ev event, const c[] name, b dontBroadcast )
 #define NEW_EV(%1) pub %1( Ev event, const c[] name, b dontBroadcast )
-#define STRBOOL "<0|1>"
+#define STRCPY(%1,%2) strcopy(%1, sizeof(%1), %2)
 
 public Plugin myinfo = {
     name        = "passtime.tf extras",
@@ -100,7 +102,7 @@ f g_vSaveVel[3];
 b g_bResupplyEnabled       = true;
 b g_bInstantRespawnEnabled = true;
 b g_bImmunityAmmoEnabled   = true;
-b g_bSaveLoadEnabled       = true;
+b g_bSaveEnabled       = true;
 
 b g_bFailsafeTriggered = false; // Track if failsafe has been triggered
 
@@ -240,7 +242,7 @@ pub v OnClientPutInServer( i client ) {
 
 b IsMatch() {
     // Match is not active if game is awaiting ready restart, timer is paused, or timer is disabled
-    b awaitingReadyRestart = view_as<b>(GameRules_GetProp("m_bAwaitingReadyRestart"));
+    b awaitingReadyRestart = as<b>(GameRules_GetProp("m_bAwaitingReadyRestart"));
     i timerEnt      = -1;
     b timerPaused   = false;
     b timerDisabled = false;
@@ -248,8 +250,8 @@ b IsMatch() {
     
     // Find any active team_round_timer entity
     while ((timerEnt = FindEntityByClassname(timerEnt, "team_round_timer")) != -1) {
-        timerPaused   = view_as<b>(GetEntProp(timerEnt, Prop_Send, "m_bTimerPaused"));
-        timerDisabled = view_as<b>(GetEntProp(timerEnt, Prop_Send, "m_bIsDisabled"));
+        timerPaused   = as<b>(GetEntProp(timerEnt, Prop_Send, "m_bTimerPaused"));
+        timerDisabled = as<b>(GetEntProp(timerEnt, Prop_Send, "m_bIsDisabled"));
         
         // If we found a timer, break since we only need to check one
         if (timerEnt != -1) break;
@@ -331,9 +333,9 @@ NEW_CMD(CSetTeam) {
         }
 
         c team_name[ 5 ];
-        GetTeamName( view_as<i>( team ), team_name, sizeof( team_name ) );
+        GetTeamName( as<i>( team ), team_name, sizeof( team_name ) );
 
-        ReplyToCommand( client, "Switched %s to %s", target_name, team_name );
+        Reply( client, "Switched %s to %s", target_name, team_name );
     }
     PH;
 }
@@ -378,16 +380,16 @@ NEW_CMD(CSetFOV) {
     // Apply FOV immediately
     SetFOV( client, fov );
 
-    ReplyToCommand( client, "Your FOV has been set to %d.%s", fov,
+    Reply( client, "Your FOV has been set to %d.%s", fov,
                     cookieSuccess ? "" : " (Steam connection down, saved for this session only)" );
     PH;
 }
 
 // Save a spawn point
 NEW_CMD(CSaveSpawn) {
-    if ( !g_bSaveLoadEnabled ) return EndCmd( client, "Save/Load spawn functionality has been disabled by an administrator.");
-    if ( IsMatch() )           return EndCmd( client, "Saving spawn points is disabled in match mode.");
-    if ( args != 0 )           return EndCmd( client, "Usage: sm_save" );
+    if ( !g_bSaveEnabled ) return EndCmd( client, "Save/Load spawn functionality has been disabled by an administrator.");
+    if ( IsMatch() )       return EndCmd( client, "Saving spawn points is disabled in match mode.");
+    if ( args != 0 )       return EndCmd( client, "Usage: sm_save" );
     if ( client <= 0 || client > MaxClients || !IsClientInGame( client ) ) PH;
     if ( !IsPlayerAlive( client ) ) PH;
 
@@ -426,7 +428,7 @@ NEW_CMD(CSaveSpawn) {
 
 // Load (teleport) to saved spawn
 NEW_CMD(CLoadSpawn) {
-    if ( IsMatch() || !g_bSaveLoadEnabled ) return EndCmd(client, "Loading is disabled.");
+    if ( IsMatch() || !g_bSaveEnabled ) return EndCmd( client, "Loading is disabled." );
     if ( !IsValidClient( client ) ) PH;
     if ( args != 0 ) return EndCmd( client, "Usage: sm_load" );
     if ( !g_bSavedSpawnValid ) return EndCmd( client, "No saved spawn point set yet." );
@@ -452,29 +454,29 @@ NEW_CMD(CLoadSpawn) {
 
 // Toggle immunity
 NEW_CMD(CImmune) {
-    if (IsMatch() || !g_bImmunityAmmoEnabled) return EndCmd(client, "Immunity is disabled.");
+    if ( IsMatch() || !g_bImmunityAmmoEnabled ) return EndCmd( client, "Immunity is disabled." );
     if ( args == 0 ) g_bImmunity[ client ] = !g_bImmunity[ client ];
     else return EndCmd( client, "Usage: sm_immunity" );
     
-    SetImmunityCookie(client, g_bImmunity[client]);
+    SetImmunityCookie( client, g_bImmunity[ client ] );
     
     if ( IsPlayerAlive( client ) ) TF2_RespawnPlayer( client );
     
-    ReplyToCommand( client, "Immunity %s.", g_bImmunity[ client ] ? "enabled" : "disabled" );
+    Reply( client, "Immunity %s.", g_bImmunity[ client ] ? "enabled" : "disabled" );
     PH;
 }
 
 // Toggle infinite ammo
 NEW_CMD(CInfiniteAmmo) {
-    if (IsMatch() || !g_bImmunityAmmoEnabled) return EndCmd(client, "Infinite ammo is disabled.");
+    if ( IsMatch() || !g_bImmunityAmmoEnabled ) return EndCmd( client, "Infinite ammo is disabled." );
     if ( args == 0 ) g_bInfiniteAmmo[ client ] = !g_bInfiniteAmmo[ client ];
     else return EndCmd( client, "Usage: sm_ammo" );
     
-    SetAmmoCookie(client, g_bInfiniteAmmo[client]);
+    SetAmmoCookie( client, g_bInfiniteAmmo[ client ] );
     
     if ( IsPlayerAlive( client ) ) TF2_RespawnPlayer( client );
     
-    ReplyToCommand( client, "Infinite ammo %s.", g_bInfiniteAmmo[ client ] ? "enabled" : "disabled" );
+    Reply( client, "Infinite ammo %s.", g_bInfiniteAmmo[ client ] ? "enabled" : "disabled" );
     PH;
 }
 
@@ -493,8 +495,8 @@ NEW_CMD(CSetClass) {
     i targets[ MAXPLAYERS ];
     c target_name[ MAX_TARGET_LENGTH ];
     b tn_is_ml = false;
-    i count = ProcessTargetString( targetArg, client, targets, MAXPLAYERS, COMMAND_FILTER_CONNECTED, target_name, sizeof( target_name ), tn_is_ml );
-    b changed = false;
+    i count    = ProcessTargetString( targetArg, client, targets, MAXPLAYERS, COMMAND_FILTER_CONNECTED, target_name, sizeof( target_name ), tn_is_ml );
+    b changed  = false;
     if ( count == COMMAND_TARGET_NONE ) PH;
 
     for ( i n = 0; n < count; n++ ) {
@@ -509,60 +511,60 @@ NEW_CMD(CSetClass) {
     if ( changed ) {
         c className[16];
         switch (tfclass) {
-            case TFClass_Scout:    strcopy(className, sizeof(className), "Scout");
-            case TFClass_Soldier:  strcopy(className, sizeof(className), "Soldier");
-            case TFClass_Pyro:     strcopy(className, sizeof(className), "Pyro");
-            case TFClass_DemoMan:  strcopy(className, sizeof(className), "Demoman");
-            case TFClass_Heavy:    strcopy(className, sizeof(className), "Heavy");
-            case TFClass_Engineer: strcopy(className, sizeof(className), "Engineer");
-            case TFClass_Medic:    strcopy(className, sizeof(className), "Medic");
-            case TFClass_Sniper:   strcopy(className, sizeof(className), "Sniper");
-            case TFClass_Spy:      strcopy(className, sizeof(className), "Spy");
-            default:               strcopy(className, sizeof(className), "Unknown");
+            case TFClass_Scout:    STRCPY(className, "Scout");
+            case TFClass_Soldier:  STRCPY(className, "Soldier");
+            case TFClass_Pyro:     STRCPY(className, "Pyro");
+            case TFClass_DemoMan:  STRCPY(className, "Demoman");
+            case TFClass_Heavy:    STRCPY(className, "Heavy");
+            case TFClass_Engineer: STRCPY(className, "Engineer");
+            case TFClass_Medic:    STRCPY(className, "Medic");
+            case TFClass_Sniper:   STRCPY(className, "Sniper");
+            case TFClass_Spy:      STRCPY(className, "Spy");
+            default: STRCPY(className, "Unknown");
         }
-        ReplyToCommand( client, "Set %s class to %s", target_name, className );
+        Reply( client, "Set %s class to %s", target_name, className );
     }
     PH;
 }
 
 TFClassType ParseClass( c[] s ) {
-    if ( StrEqual( s, "soldier" )  || StrEqual( s, "2" ) ) return TFClass_Soldier;
-    if ( StrEqual( s, "demo" )     || StrEqual( s, "demoman" ) || StrEqual( s, "4" ) ) return TFClass_DemoMan;
-    if ( StrEqual( s, "medic" )    || StrEqual( s, "7" ) ) return TFClass_Medic;
+    if ( StrEqual( s, "soldier" ) || StrEqual( s, "2" ) ) return TFClass_Soldier;
+    if ( StrEqual( s, "demo" )    || StrEqual( s, "demoman" ) || StrEqual( s, "4" ) ) return TFClass_DemoMan;
+    if ( StrEqual( s, "medic" )   || StrEqual( s, "7" ) ) return TFClass_Medic;
     return TFClass_Unknown;
 }
 
 NEW_CMD(CRoundTimeDebug) {
-    i ent = -1;
+    i ent   = -1;
     i found = 0;
     
     while ((ent = FindEntityByClassname(ent, "team_round_timer")) != -1) {
-        b timerPaused         = view_as<b>(GetEntProp(     ent, Prop_Send, "m_bTimerPaused"));
-        f timeRemaining       =            GetEntPropFloat(ent, Prop_Send, "m_flTimeRemaining");
-        f timerEndTime        =            GetEntPropFloat(ent, Prop_Send, "m_flTimerEndTime");
-        b isDisabled          = view_as<b>(GetEntProp(     ent, Prop_Send, "m_bIsDisabled"));
-        b showInHUD           = view_as<b>(GetEntProp(     ent, Prop_Send, "m_bShowInHUD"));
-        i timerLength         =            GetEntProp(     ent, Prop_Send, "m_nTimerLength");
-        i timerInitialLength  =            GetEntProp(     ent, Prop_Send, "m_nTimerInitialLength");
-        i timerMaxLength      =            GetEntProp(     ent, Prop_Send, "m_nTimerMaxLength");
-        b autoCountdown       = view_as<b>(GetEntProp(     ent, Prop_Send, "m_bAutoCountdown"));
-        i setupTimeLength     =            GetEntProp(     ent, Prop_Send, "m_nSetupTimeLength");
-        i state               =            GetEntProp(     ent, Prop_Send, "m_nState");
-        b startPaused         = view_as<b>(GetEntProp(     ent, Prop_Send, "m_bStartPaused"));
-        b showTimeRemaining   = view_as<b>(GetEntProp(     ent, Prop_Send, "m_bShowTimeRemaining"));
-        b inCaptureWatchState = view_as<b>(GetEntProp(     ent, Prop_Send, "m_bInCaptureWatchState"));
-        f totalTime           =            GetEntPropFloat(ent, Prop_Send, "m_flTotalTime");
-        b stopWatchTimer      = view_as<b>(GetEntProp(     ent, Prop_Send, "m_bStopWatchTimer"));
+        b timerPaused         = as<b>(GetEntProp(     ent, Prop_Send, "m_bTimerPaused"));
+        f timeRemaining       =       GetEntPropFloat(ent, Prop_Send, "m_flTimeRemaining");
+        f timerEndTime        =       GetEntPropFloat(ent, Prop_Send, "m_flTimerEndTime");
+        b isDisabled          = as<b>(GetEntProp(     ent, Prop_Send, "m_bIsDisabled"));
+        b showInHUD           = as<b>(GetEntProp(     ent, Prop_Send, "m_bShowInHUD"));
+        i timerLength         =       GetEntProp(     ent, Prop_Send, "m_nTimerLength");
+        i timerInitialLength  =       GetEntProp(     ent, Prop_Send, "m_nTimerInitialLength");
+        i timerMaxLength      =       GetEntProp(     ent, Prop_Send, "m_nTimerMaxLength");
+        b autoCountdown       = as<b>(GetEntProp(     ent, Prop_Send, "m_bAutoCountdown"));
+        i setupTimeLength     =       GetEntProp(     ent, Prop_Send, "m_nSetupTimeLength");
+        i state               =       GetEntProp(     ent, Prop_Send, "m_nState");
+        b startPaused         = as<b>(GetEntProp(     ent, Prop_Send, "m_bStartPaused"));
+        b showTimeRemaining   = as<b>(GetEntProp(     ent, Prop_Send, "m_bShowTimeRemaining"));
+        b inCaptureWatchState = as<b>(GetEntProp(     ent, Prop_Send, "m_bInCaptureWatchState"));
+        f totalTime           =       GetEntPropFloat(ent, Prop_Send, "m_flTotalTime");
+        b stopWatchTimer      = as<b>(GetEntProp(     ent, Prop_Send, "m_bStopWatchTimer"));
         
         // Check if game is ongoing using m_bAwaitingReadyRestart and timer pause state
-        b awaitingReadyRestart = view_as<b>(GameRules_GetProp("m_bAwaitingReadyRestart"));
+        b awaitingReadyRestart = as<b>(GameRules_GetProp("m_bAwaitingReadyRestart"));
         b gameOngoing = !awaitingReadyRestart && !timerPaused && !isDisabled;
         
-        ReplyToCommand(client, "[timer %d] m_bTimerPaused=%d m_flTimeRemaining=%.2f m_flTimerEndTime=%.2f m_bIsDisabled=%d m_bShowInHUD=%d", ent, timerPaused, timeRemaining, timerEndTime, isDisabled, showInHUD);
-        ReplyToCommand(client, "[timer %d] m_nTimerLength=%d m_nTimerInitialLength=%d m_nTimerMaxLength=%d m_bAutoCountdown=%d", ent, timerLength, timerInitialLength, timerMaxLength, autoCountdown);
-        ReplyToCommand(client, "[timer %d] m_nSetupTimeLength=%d m_nState=%d m_bStartPaused=%d m_bShowTimeRemaining=%d", ent, setupTimeLength, state, startPaused, showTimeRemaining);
-        ReplyToCommand(client, "[timer %d] m_bInCaptureWatchState=%d m_flTotalTime=%.2f m_bStopWatchTimer=%d", ent, inCaptureWatchState, totalTime, stopWatchTimer);
-        ReplyToCommand(client, "[timer %d] Game Ongoing: %d (m_bAwaitingReadyRestart=%d)", ent, gameOngoing, awaitingReadyRestart);
+        Reply(client, "[timer %d] m_bTimerPaused=%d m_flTimeRemaining=%.2f m_flTimerEndTime=%.2f m_bIsDisabled=%d m_bShowInHUD=%d", ent, timerPaused, timeRemaining, timerEndTime, isDisabled, showInHUD);
+        Reply(client, "[timer %d] m_nTimerLength=%d m_nTimerInitialLength=%d m_nTimerMaxLength=%d m_bAutoCountdown=%d",             ent, timerLength, timerInitialLength, timerMaxLength, autoCountdown);
+        Reply(client, "[timer %d] m_nSetupTimeLength=%d m_nState=%d m_bStartPaused=%d m_bShowTimeRemaining=%d",                     ent, setupTimeLength, state, startPaused, showTimeRemaining);
+        Reply(client, "[timer %d] m_bInCaptureWatchState=%d m_flTotalTime=%.2f m_bStopWatchTimer=%d",                               ent, inCaptureWatchState, totalTime, stopWatchTimer);
+        Reply(client, "[timer %d] Game Ongoing: %d (m_bAwaitingReadyRestart=%d)",                                                   ent, gameOngoing, awaitingReadyRestart);
         
         found++;
     }
@@ -592,7 +594,7 @@ NEW_CMD(CToggleResupply) {
         g_bFailsafeTriggered = false;
     }
     
-    ReplyToCommand(client, "Resupply functionality %s", g_bResupplyEnabled ? "ENABLED" : "DISABLED");
+    Reply(client, "Resupply functionality %s", g_bResupplyEnabled ? "ENABLED" : "DISABLED");
     PH;
 }
 
@@ -608,7 +610,7 @@ NEW_CMD(CToggleRespawn) {
     
     g_bInstantRespawnEnabled = (value != 0);
     
-    ReplyToCommand(client, "Instant respawn %s", g_bInstantRespawnEnabled ? "enabled" : "disabled");
+    Reply(client, "Instant respawn %s", g_bInstantRespawnEnabled ? "enabled" : "disabled");
     PH;
 }
 
@@ -638,7 +640,7 @@ NEW_CMD(CToggleImmunity) {
         }
     }
     
-    ReplyToCommand(client, "Immunity and infinite ammo %s", g_bImmunityAmmoEnabled ? "ENABLED" : "DISABLED");
+    Reply(client, "Immunity and infinite ammo %s", g_bImmunityAmmoEnabled ? "ENABLED" : "DISABLED");
     PH;
 }
 
@@ -652,9 +654,9 @@ NEW_CMD(CToggleSaveLoad) {
     
     if (value != 0 && value != 1) return EndCmd(client, "Usage: sm_enable_saveload <0|1> (0=disable, 1=enable)");
     
-    g_bSaveLoadEnabled = (value != 0);
+    g_bSaveEnabled = (value != 0);
     
-    ReplyToCommand(client, "Save/Load spawn functionality %s", g_bSaveLoadEnabled ? "ENABLED" : "DISABLED");
+    Reply(client, "Save/Load spawn functionality %s", g_bSaveEnabled ? "ENABLED" : "DISABLED");
     PH;
 }
 
@@ -761,7 +763,7 @@ pub OnFOVQueried( QueryCookie cookie, i client, ConVarQueryResult result, const 
 Act EndCmd( i client, const c[] format, any... ) {
     c buffer[ 254 ];
     VFormat( buffer, sizeof( buffer ), format, 3 );
-    ReplyToCommand( client, "%s", buffer );
+    Reply( client, "%s", buffer );
     PH;
 }   
 
