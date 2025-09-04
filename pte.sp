@@ -11,6 +11,7 @@
 #include <sdktools_entoutput>
 #include <sdkhooks>
 
+
 #pragma semicolon 1
 
 // Constants
@@ -18,32 +19,38 @@
 #define BLU             1
 #define TEAM_OFFSET     2
 #define EDICT           2048
-#define MAX_SPAWN_ROOMS 4
-#define MAX_SLOTS       2
+#define MAXSPAWNS 4
+#define MAXSLOTS       2
 #define RESUPDIST       512.0 // Max dist from spawn resupply can be used
 
 // MACROS
-#define PCH return Plugin_Changed
-#define PCO return Plugin_Continue
-#define PH  return Plugin_Handled
-#define pub public
-#define as  view_as
-#define Act Action
-#define Han Handle
-#define Ev  Event
-#define i   int
-#define v   void
-#define f   float
-#define b   bool
-#define c   char
+#define PCH   return Plugin_Changed
+#define PCO   return Plugin_Continue
+#define PH    return Plugin_Handled
+#define pub   public
+#define as    view_as
+#define Act   Action
+#define Han   Handle
+#define Ev    Event
+#define Pac   public Action
+#define i     int
+#define v     void
+#define f     float
+#define b     bool
+#define c     char
 #define Reply ReplyToCommand
 #define RCC   RegConsoleCmd
 #define RAC   RegAdminCmd
 #define HE    HookEvent
-#define NEW_CMD(%1) pub Act %1( i client, i args )
-#define NEW_EV_ACT(%1) pub Act %1( Ev event, const c[] name, b dontBroadcast )
-#define NEW_EV(%1) pub %1( Ev event, const c[] name, b dontBroadcast )
-#define STRCPY(%1,%2) strcopy(%1, sizeof(%1), %2)
+#define NOTIFY FCVAR_NOTIFY
+#define GENERIC ADMFLAG_GENERIC
+#define FindEntByClass FindEntityByClassname
+
+#define NEW_CMD(%1)     Pac %1( i client, i args )
+#define NEW_EV_ACT(%1)  Pac %1( Ev event, const c[] name, b dontBroadcast )
+#define NEW_EV(%1)      pub %1( Ev event, const c[] name, b dontBroadcast )
+#define STRCP(%1,%2)    strcopy(%1, sizeof(%1), %2)
+#define FOR_EACH_CLIENT(%1) for ( i %1 = 1; %1 <= MaxClients; %1++ )
 
 public Plugin myinfo = {
     name        = "passtime.tf extras",
@@ -57,40 +64,38 @@ public Plugin myinfo = {
 Han g_hCookieFOV;
 Han g_hCookieInfiniteAmmo;
 Han g_hCookieImmunity;
-Han g_cvFOVMin;
-Han g_cvFOVMax;
+
+ConVar g_cvFOVMin;
+ConVar g_cvFOVMax;
 
 // Backup system for FOV tracking when Steam connection is down
-b g_bSteamConnected = true;           // Track if Steam is currently connected
-b g_bBackupFOVDB    = false;          // Track if we're using the backup system
-b g_bPlayerTracked[ MAXPLAYERS + 1 ]; // Track if we have a FOV value for this player
-i g_iPlayerFOV[     MAXPLAYERS + 1 ]; // Store FOV values for each player
+b g_bSteamOnline = true;          // Track if Steam is currently connected
+b g_bBackupFOVDB = false;         // Track if we're using the backup system
+b g_bPlayerTracked[ MAXPLAYERS ]; // Track if we have a FOV value for this player
+i g_iPlayerFOV[     MAXPLAYERS ]; // Store FOV values for each player
 
 // Backup system for infinite ammo and immunity when Steam is down
-b g_bBackupInfiniteAmmoTracked[MAXPLAYERS + 1]; // Track if we have infinite ammo setting for this player
-b g_bBackupImmunityTracked[    MAXPLAYERS + 1]; // Track if we have immunity setting for this player
-b g_bBackupInfiniteAmmo[       MAXPLAYERS + 1]; // Store infinite ammo setting for each player
-b g_bBackupImmunity[           MAXPLAYERS + 1]; // Store immunity setting for each player
+b g_bBackupInfiniteAmmoTracked[MAXPLAYERS]; // Track if we have infinite ammo setting for this player
+b g_bBackupImmunityTracked[    MAXPLAYERS]; // Track if we have immunity setting for this player
+b g_bBackupInfiniteAmmo[       MAXPLAYERS]; // Store infinite ammo setting for each player
+b g_bBackupImmunity[           MAXPLAYERS]; // Store immunity setting for each player
 
-// Spawn room tracking
-b g_bIsClientInSpawn[MAXPLAYERS + 1];                  // Track if player is in any spawn room
-i g_iPlayerSpawns[   MAXPLAYERS + 1][MAX_SPAWN_ROOMS]; // Track which spawn rooms a player is in
-i g_iSpawnTeam[      EDICT];                           // Track which team a spawn room belongs to (entity index -> team)
-b g_bResupplyDn[     MAXPLAYERS + 1];                  // Track if resupply key is currently down
-b g_bResupplyUp[     MAXPLAYERS + 1];                  // Track if resupply has been used during current key press
+// Resupply tracking
+b g_bResupplyDn[ MAXPLAYERS ]; // Is resupply key down
+b g_bResupplyUp[ MAXPLAYERS ]; // Has resupply been used during current key press
 
-// No-damage & infinite ammo toggle per player
-b g_bImmunity[MAXPLAYERS + 1];
-i g_iPreDamageHP[MAXPLAYERS + 1];
-b g_bPendingRestoreHP[MAXPLAYERS + 1];
-b g_bInfiniteAmmo[MAXPLAYERS + 1];
+// Immunity & infinite ammo toggle per player
+b g_bImmunity[    MAXPLAYERS];
+i g_iPreDamageHP[ MAXPLAYERS];
+b g_bPendingHP[   MAXPLAYERS];
+b g_bInfiniteAmmo[MAXPLAYERS];
 
 // Original ammo values for infinite ammo restoration (only allocated for players using infinite ammo)
-ArrayList g_hOriginalAmmo[MAXPLAYERS + 1]; // Dynamic arrays for players who actually use infinite ammo
+ArrayList g_hOriginalAmmo[MAXPLAYERS]; // Dynamic arrays for players who actually use infinite ammo
 
 // Respawn time control
 ConVar g_cvRespawnTime;
-b g_bTeamReadyState[2] = { false, false }; // Track ready state for RED and BLU
+b      g_bIsTeamReady[2] = { false, false }; // Track ready state for RED and BLU
 
 // Saved spawn point (admin tools)
 b g_bSavedSpawnValid = false;
@@ -102,29 +107,29 @@ f g_vSaveVel[3];
 b g_bResupplyEnabled       = true;
 b g_bInstantRespawnEnabled = true;
 b g_bImmunityAmmoEnabled   = true;
-b g_bSaveEnabled       = true;
+b g_bSaveEnabled           = true;
 
 b g_bFailsafeTriggered = false; // Track if failsafe has been triggered
 
-i g_iSavedClip1[    MAX_SLOTS];
-i g_iSavedClip2[    MAX_SLOTS];
-i g_iSavedAmmoType[ MAX_SLOTS][2];
-i g_iSavedAmmoCount[MAX_SLOTS][2];
+i g_iSavedClip1[    MAXSLOTS];
+i g_iSavedClip2[    MAXSLOTS];
+i g_iSavedAmmoType[ MAXSLOTS][2];
+i g_iSavedAmmoCount[MAXSLOTS][2];
 
 pub OnPluginStart() {
     // Admin commands
-    RAC( "sm_setteam",         CSetTeam,        ADMFLAG_GENERIC, "Set a client's team" );
-    RAC( "sm_st",              CSetTeam,        ADMFLAG_GENERIC, "Set a client's team" );
-    RAC( "sm_setclass",        CSetClass,       ADMFLAG_GENERIC, "Set a client's class" );
-    RAC( "sm_sc",              CSetClass,       ADMFLAG_GENERIC, "Set a client's class" );
-    RAC( "sm_ready",           CReady,          ADMFLAG_GENERIC, "Set a team's ready status" );
-    RAC( "sm_rdy",             CReady,          ADMFLAG_GENERIC, "Set a team's ready status" );
-    RAC( "sm_debug_roundtime", CRoundTimeDebug, ADMFLAG_GENERIC, "Debug: print team_round_timer info" );
-    RAC( "sm_drt",             CRoundTimeDebug, ADMFLAG_GENERIC, "Debug: print team_round_timer info" );
-    RAC( "sm_enable_resupply", CToggleResupply, ADMFLAG_GENERIC, "Toggle resupply functionality" );
-    RAC( "sm_enable_respawn",  CToggleRespawn,  ADMFLAG_GENERIC, "Toggle instant respawn" );
-    RAC( "sm_enable_immunity", CToggleImmunity, ADMFLAG_GENERIC, "Toggle immunity and infinite ammo" );
-    RAC( "sm_enable_saveload", CToggleSaveLoad, ADMFLAG_GENERIC, "Toggle save/load spawn functionality" );
+    RAC( "sm_setteam",         CSetTeam,        GENERIC, "Set a client's team" );
+    RAC( "sm_st",              CSetTeam,        GENERIC, "Set a client's team" );
+    RAC( "sm_setclass",        CSetClass,       GENERIC, "Set a client's class" );
+    RAC( "sm_sc",              CSetClass,       GENERIC, "Set a client's class" );
+    RAC( "sm_ready",           CReady,          GENERIC, "Set a team's ready status" );
+    RAC( "sm_rdy",             CReady,          GENERIC, "Set a team's ready status" );
+    RAC( "sm_debug_roundtime", CDebugRoundTime, GENERIC, "Debug: print team_round_timer info" );
+    RAC( "sm_drt",             CDebugRoundTime, GENERIC, "Debug: print team_round_timer info" );
+    RAC( "sm_enable_resupply", CToggleResupply, GENERIC, "Toggle resupply functionality" );
+    RAC( "sm_enable_respawn",  CToggleRespawn,  GENERIC, "Toggle instant respawn" );
+    RAC( "sm_enable_immunity", CToggleImmunity, GENERIC, "Toggle immunity and infinite ammo" );
+    RAC( "sm_enable_saveload", CToggleSave,     GENERIC, "Toggle save/load spawn functionality" );
 
     // Console commands
     RCC( "sm_save",         CSaveSpawn,    "Save a spawn point" );
@@ -148,35 +153,25 @@ pub OnPluginStart() {
     // Console variables
     g_cvFOVMin      = CreateConVar( "sm_fov_min",      "70",  "Minimum client field of view", _, 1, 1.0, 1, 175.0 );
     g_cvFOVMax      = CreateConVar( "sm_fov_max",      "120", "Maximum client field of view", _, 1, 1.0, 1, 175.0 );
-    g_cvRespawnTime = CreateConVar( "sm_respawn_time", "0.0", "Player respawn delay in seconds", FCVAR_NOTIFY );
+    g_cvRespawnTime = CreateConVar( "sm_respawn_time", "0.0", "Player respawn delay in seconds", NOTIFY );
 
     // Hook events
     HE( "player_spawn",      EPSpawn );
-    HE( "player_connect",    EPConnect );
     HE( "player_disconnect", EPDisconnect );
     HE( "player_death",      EPDeath );
     
     // Initialize team ready states
-    g_bTeamReadyState[0] = false;
-    g_bTeamReadyState[1] = false;
+    g_bIsTeamReady[0] = false;
+    g_bIsTeamReady[1] = false;
     
     // Initialize spawn room tracking arrays
-    for (i n = 1; n <= MaxClients; n++) {
-        g_bIsClientInSpawn[n] = false;
+    FOR_EACH_CLIENT( n ) {
         g_bResupplyDn[n]      = false;
         g_bResupplyUp[n]      = false;
-        
-        // Initialize spawn room entity tracking
-        for (i s = 0; s < MAX_SPAWN_ROOMS; s++) {
-            g_iPlayerSpawns[n][s] = -1;
-        }
     }
     
-    // Initialize spawn room team tracking
-    g_iSpawnTeam[0] = 0;
-    
     // Initialize saved ammo/velocity buffers
-    for (i s = 0; s < MAX_SLOTS; s++) {
+    for (i s = 0; s < MAXSLOTS; s++) {
         g_iSavedClip1[s] = -1;
         g_iSavedClip2[s] = -1;
         for (i t = 0; t < 2; t++) {
@@ -186,7 +181,7 @@ pub OnPluginStart() {
     }
     
     // Initialize infinite ammo ArrayList handles and backup tracking
-    for (i n = 1; n <= MaxClients; n++) {
+    FOR_EACH_CLIENT( n ) {
         g_hOriginalAmmo[n]              = null;
         g_bInfiniteAmmo[n]              = false;
         g_bBackupInfiniteAmmoTracked[n] = false;
@@ -196,10 +191,10 @@ pub OnPluginStart() {
     }
     
     // Hook damage for currently connected clients and reset nodamage flags
-    for (i n = 1; n <= MaxClients; n++) {
-        g_bImmunity[n]         = false;
-        g_bPendingRestoreHP[n] = false;
-        g_iPreDamageHP[n]      = 0;
+    FOR_EACH_CLIENT( n ) {
+        g_bImmunity[n]    = false;
+        g_bPendingHP[n]   = false;
+        g_iPreDamageHP[n] = 0;
         if ( IsClientInGame(n) ) {
             SDKHook( n, SDKHook_OnTakeDamage,     Hook_OnTakeDamage );
             SDKHook( n, SDKHook_OnTakeDamagePost, Hook_OnTakeDamagePost );
@@ -208,10 +203,9 @@ pub OnPluginStart() {
 }
 
 pub v OnGameFrame() {
-    // Loop through all clients
-    for ( i client = 1; client <= MaxClients; client++ ) {
+    FOR_EACH_CLIENT( client ) {
         // Check for infinite ammo players (excluding medics) and if globally enabled
-        if ( IsValidClient( client ) && g_bInfiniteAmmo[ client ] && g_bImmunityAmmoEnabled && !IsMatch()) {
+        if ( IsValidClientAlive( client ) && g_bInfiniteAmmo[ client ] && g_bImmunityAmmoEnabled && !IsMatch()) {
             // Skip medics
             if (TF2_GetPlayerClass(client) == TFClass_Medic) continue;
 
@@ -220,15 +214,11 @@ pub v OnGameFrame() {
             if ( weapon == -1 || !IsValidEntity( weapon ) ) continue;
 
             SetEntProp( weapon, Prop_Send, "m_iClip1", 19 );
-            SetEntProp( weapon, Prop_Send, "m_iClip2", 84 );
-
-            for ( i ammoType = 0; ammoType < 32; ammoType++ ) {
-                SetEntProp( client, Prop_Send, "m_iAmmo", 999, _, ammoType );
-            }
+            SetAmmo(client, weapon, 84);
         }
 
         // Check for buffered resupply (only if globally enabled)
-        if (g_bResupplyEnabled && g_bResupplyDn[client] && !g_bResupplyUp[client] && IsClientInSpawn(client)) {
+        if (g_bResupplyEnabled && g_bResupplyDn[client] && !g_bResupplyUp[client] && IsClientInSpawnroom(client)) {
             Resupply(client);
         }
     }
@@ -238,6 +228,12 @@ pub v OnGameFrame() {
 pub v OnClientPutInServer( i client ) {
     SDKHook( client, SDKHook_OnTakeDamage,     Hook_OnTakeDamage );
     SDKHook( client, SDKHook_OnTakeDamagePost, Hook_OnTakeDamagePost );
+
+    if ( g_bBackupFOVDB ) {
+        // Reset tracking for this player slot if backup system is active
+        g_bPlayerTracked[ client ] = false;
+        g_iPlayerFOV[     client ] = 0;
+    }
 }
 
 b IsMatch() {
@@ -258,7 +254,7 @@ b IsMatch() {
     }
     
     // Match is active only if we're not awaiting ready restart and timer is running (not paused and not disabled)
-    return !(awaitingReadyRestart || timerPaused || timerDisabled || !IsPostRound);
+    return !(awaitingReadyRestart || timerPaused || timerDisabled || IsPostRound);
 }
 
 // ====================================================================================================
@@ -289,7 +285,7 @@ NEW_CMD(CReady) {
     GameRules_SetProp( "m_bTeamReady", status, 1, gameRulesTeamOffset );
     
     // Update our internal tracking
-    g_bTeamReadyState[teamIndex] = (status != 0);
+    g_bIsTeamReady[teamIndex] = (status != 0);
     
     PH;
 }
@@ -318,9 +314,7 @@ NEW_CMD(CSetTeam) {
     // Change team of client(s)
     for ( i n = 0; n < target_count; n++ ) {
         i targetId = target_list[ n ];
-        if ( !IsValidClient( targetId ) || TF2_GetClientTeam( targetId ) == team ) {
-            continue;
-        }
+        if ( !IsValidClient( targetId ) || TF2_GetClientTeam( targetId ) == team ) continue;
         check = true;
         ForcePlayerSuicide( targetId );
         TF2_ChangeClientTeam( targetId, team );
@@ -328,7 +322,7 @@ NEW_CMD(CSetTeam) {
     }
 
     if ( check ) {
-        for ( i n = 1; n <= MaxClients; n++ ) {
+        FOR_EACH_CLIENT( n ) {
             GameRules_SetProp( "m_bTeamReady", 0, .element = n );
         }
 
@@ -363,14 +357,14 @@ NEW_CMD(CSetFOV) {
         IntToString( fov, cookie, sizeof( cookie ) );
         SetClientCookie( client, g_hCookieFOV, cookie );
         cookieSuccess     = true;
-        g_bSteamConnected = true; // Steam is connected if cookies work
+        g_bSteamOnline = true; // Steam is connected if cookies work
 
         // If we were using backup system but Steam is now connected, we can disable it
         if ( g_bBackupFOVDB ) SetBackupSystem( false );
     } else {
         // Steam is down, initialize backup system if not already done
         if ( !g_bBackupFOVDB ) SetBackupSystem( true );
-        g_bSteamConnected = false;
+        g_bSteamOnline = false;
 
         // Store in backup system
         g_iPlayerFOV[ client ]     = fov;
@@ -380,15 +374,13 @@ NEW_CMD(CSetFOV) {
     // Apply FOV immediately
     SetFOV( client, fov );
 
-    Reply( client, "Your FOV has been set to %d.%s", fov,
-                    cookieSuccess ? "" : " (Steam connection down, saved for this session only)" );
+    Reply( client, "Your FOV has been set to %d. %s", fov, cookieSuccess ? "" : "(Steam is down, the change will not be permanent.)" );
     PH;
 }
 
-// Save a spawn point
+// Save a point
 NEW_CMD(CSaveSpawn) {
-    if ( !g_bSaveEnabled ) return EndCmd( client, "Save/Load spawn functionality has been disabled by an administrator.");
-    if ( IsMatch() )       return EndCmd( client, "Saving spawn points is disabled in match mode.");
+    if ( IsMatch() || !g_bSaveEnabled )       return EndCmd( client, "Saving is disabled.");
     if ( args != 0 )       return EndCmd( client, "Usage: sm_save" );
     if ( client <= 0 || client > MaxClients || !IsClientInGame( client ) ) PH;
     if ( !IsPlayerAlive( client ) ) PH;
@@ -398,7 +390,7 @@ NEW_CMD(CSaveSpawn) {
     GetEntPropVector( client, Prop_Data, "m_vecAbsVelocity", g_vSaveVel );
     
     // Save current ammo and clips for carried weapons
-    for ( i s = 0; s < MAX_SLOTS; s++ ) {
+    for ( i s = 0; s < MAXSLOTS; s++ ) {
         g_iSavedClip1[s] = -1;
         g_iSavedClip2[s] = -1;
         g_iSavedAmmoType[s][0] = -1;
@@ -426,17 +418,17 @@ NEW_CMD(CSaveSpawn) {
     PH;
 }
 
-// Load (teleport) to saved spawn
+// Load saved point
 NEW_CMD(CLoadSpawn) {
     if ( IsMatch() || !g_bSaveEnabled ) return EndCmd( client, "Loading is disabled." );
-    if ( !IsValidClient( client ) ) PH;
+    if ( !IsValidClientAlive( client ) ) PH;
     if ( args != 0 ) return EndCmd( client, "Usage: sm_load" );
     if ( !g_bSavedSpawnValid ) return EndCmd( client, "No saved spawn point set yet." );
 
     TeleportEntity( client, g_vSavePos, g_vSaveAng, g_vSaveVel );
     
     // Restore ammo and clips for current carried weapons
-    for ( i s = 0; s < MAX_SLOTS; s++ ) {
+    for ( i s = 0; s < MAXSLOTS; s++ ) {
         i wep = GetPlayerWeaponSlot( client, s );
         if ( wep != -1 ) {
             if ( g_iSavedClip1[s] >= 0 ) SetEntProp( wep, Prop_Send, "m_iClip1", g_iSavedClip1[s] );
@@ -456,7 +448,7 @@ NEW_CMD(CLoadSpawn) {
 NEW_CMD(CImmune) {
     if ( IsMatch() || !g_bImmunityAmmoEnabled ) return EndCmd( client, "Immunity is disabled." );
     if ( args == 0 ) g_bImmunity[ client ] = !g_bImmunity[ client ];
-    else return EndCmd( client, "Usage: sm_immunity" );
+    else return EndCmd( client, "Usage: sm_immune" );
     
     SetImmunityCookie( client, g_bImmunity[ client ] );
     
@@ -511,16 +503,16 @@ NEW_CMD(CSetClass) {
     if ( changed ) {
         c className[16];
         switch (tfclass) {
-            case TFClass_Scout:    STRCPY(className, "Scout");
-            case TFClass_Soldier:  STRCPY(className, "Soldier");
-            case TFClass_Pyro:     STRCPY(className, "Pyro");
-            case TFClass_DemoMan:  STRCPY(className, "Demoman");
-            case TFClass_Heavy:    STRCPY(className, "Heavy");
-            case TFClass_Engineer: STRCPY(className, "Engineer");
-            case TFClass_Medic:    STRCPY(className, "Medic");
-            case TFClass_Sniper:   STRCPY(className, "Sniper");
-            case TFClass_Spy:      STRCPY(className, "Spy");
-            default: STRCPY(className, "Unknown");
+            case TFClass_Scout:    STRCP(className, "Scout");
+            case TFClass_Soldier:  STRCP(className, "Soldier");
+            case TFClass_Pyro:     STRCP(className, "Pyro");
+            case TFClass_DemoMan:  STRCP(className, "Demoman");
+            case TFClass_Heavy:    STRCP(className, "Heavy");
+            case TFClass_Engineer: STRCP(className, "Engineer");
+            case TFClass_Medic:    STRCP(className, "Medic");
+            case TFClass_Sniper:   STRCP(className, "Sniper");
+            case TFClass_Spy:      STRCP(className, "Spy");
+            default: STRCP(className, "Unknown");
         }
         Reply( client, "Set %s class to %s", target_name, className );
     }
@@ -534,7 +526,7 @@ TFClassType ParseClass( c[] s ) {
     return TFClass_Unknown;
 }
 
-NEW_CMD(CRoundTimeDebug) {
+NEW_CMD(CDebugRoundTime) {
     i ent   = -1;
     i found = 0;
     
@@ -594,8 +586,7 @@ NEW_CMD(CToggleResupply) {
         g_bFailsafeTriggered = false;
     }
     
-    Reply(client, "Resupply functionality %s", g_bResupplyEnabled ? "ENABLED" : "DISABLED");
-    PH;
+    return EndCmd(client, "Resupply functionality %s", g_bResupplyEnabled ? "ENABLED" : "DISABLED");
 }
 
 // Backup toggle for instant respawn
@@ -610,8 +601,7 @@ NEW_CMD(CToggleRespawn) {
     
     g_bInstantRespawnEnabled = (value != 0);
     
-    Reply(client, "Instant respawn %s", g_bInstantRespawnEnabled ? "enabled" : "disabled");
-    PH;
+    return EndCmd(client, "Instant respawn %s", g_bInstantRespawnEnabled ? "enabled" : "disabled");
 }
 
 // Backup toggle for immunity and infinite ammo
@@ -628,9 +618,9 @@ NEW_CMD(CToggleImmunity) {
     
     // If disabling, turn off immunity and infinite ammo for all players
     if (!g_bImmunityAmmoEnabled) {
-        for (i n = 1; n <= MaxClients; n++) {
+        FOR_EACH_CLIENT( n ) {
             if (IsClientInGame(n)) {
-                g_bImmunity[n] = false;
+                g_bImmunity[n]     = false;
                 g_bInfiniteAmmo[n] = false;
                 if (g_hOriginalAmmo[n] != null) {
                     delete g_hOriginalAmmo[n];
@@ -640,12 +630,11 @@ NEW_CMD(CToggleImmunity) {
         }
     }
     
-    Reply(client, "Immunity and infinite ammo %s", g_bImmunityAmmoEnabled ? "ENABLED" : "DISABLED");
-    PH;
+    return EndCmd(client, "Immunity and infinite ammo %s", g_bImmunityAmmoEnabled ? "ENABLED" : "DISABLED");
 }
 
 // Backup toggle for save/load
-NEW_CMD(CToggleSaveLoad) {
+NEW_CMD(CToggleSave) {
     if (args != 1) return EndCmd(client, "Usage: sm_enable_saveload <0|1>");
     
     c arg[4];
@@ -656,8 +645,7 @@ NEW_CMD(CToggleSaveLoad) {
     
     g_bSaveEnabled = (value != 0);
     
-    Reply(client, "Save/Load spawn functionality %s", g_bSaveEnabled ? "ENABLED" : "DISABLED");
-    PH;
+    return EndCmd(client, "Save/Load spawn functionality %s", g_bSaveEnabled ? "ENABLED" : "DISABLED");
 }
 
 // ====================================================================================================
@@ -665,32 +653,20 @@ NEW_CMD(CToggleSaveLoad) {
 // ====================================================================================================
 
 // Handle player death event
-pub Act EPDeath( Ev event, const c[] name, b dontBroadcast ) {
-    i userid = event.GetInt( "userid" );
-    i client = GetClientOfUserId(userid);
-    
+Pac EPDeath( Ev event, const c[] name, b dontBroadcast ) {
     if (IsMatch()) PCO;
+
+    i client = GetClientOfUserId(event.GetInt( "userid" ));
     
     // Validate client before proceeding
-    if (client <= 0 || client > MaxClients || !IsClientInGame(client)) PCO;
+    if (!IsValidClient(client)) PCO;
     
     // Check if instant respawn is globally enabled
     if (g_bInstantRespawnEnabled && g_cvRespawnTime.FloatValue <= 0.0) {
-        RequestFrame( RespawnFrame, userid );
+        RequestFrame( RespawnFrame, client );
     }
     
     PCO;
-}
-
-// Player connect event - prepare for tracking
-NEW_EV(EPConnect) {
-    i client = GetClientOfUserId( event.GetInt( "userid" ) );
-
-    if ( client > 0 && client <= MaxClients && g_bBackupFOVDB ) {
-        // Reset tracking for this player slot if backup system is active
-        g_bPlayerTracked[ client ] = false;
-        g_iPlayerFOV[ client ]     = 0;
-    }
 }
 
 // Player disconnect event - clean up tracking
@@ -714,8 +690,8 @@ NEW_EV(EPSpawn) {
     if ( AreClientCookiesCached( client ) ) {
         if ( GetFOVCookie( client ) ) {
             // If we were using backup but Steam is now connected, we can disable it
-            if ( !g_bSteamConnected ) {
-                g_bSteamConnected = true;
+            if ( !g_bSteamOnline ) {
+                g_bSteamOnline = true;
                 if ( g_bBackupFOVDB ) SetBackupSystem( false );
             }
         }
@@ -727,7 +703,7 @@ NEW_EV(EPSpawn) {
     } else if ( !g_bBackupFOVDB ) {
         // Steam is down, initialize backup system
         SetBackupSystem( true );
-        g_bSteamConnected = false;
+        g_bSteamOnline = false;
     }
 
     // If cookies failed or aren't cached, try backup system
@@ -767,9 +743,14 @@ Act EndCmd( i client, const c[] format, any... ) {
     PH;
 }   
 
-// Checks if a client in-game, connected, not fake, alive and in a valid team
+// Checks if a client in-game, connected, not fake, and in a valid team
 b IsValidClient( i client ) {
-    return client > 0 && client <= MaxClients && IsClientInGame( client ) && !IsFakeClient( client ) && IsPlayerAlive( client ) && IsClientConnected( client );
+    return IsClientInGame( client ) && !IsFakeClient( client ) && IsClientConnected( client );
+}
+
+// Checks if a client in-game, connected, not fake, and in a valid team
+b IsValidClientAlive( i client ) {
+    return IsValidClient( client ) && IsPlayerAlive( client );
 }
 
 // Sets the client's FOV
@@ -799,18 +780,18 @@ b GetFOVCookie( i client ) {
 }
 
 // Parse TFTeam from string
-TFTeam ParseTeam( c[] t ) {
-    return StrEqual( t, "spectator" ) || StrEqual( t, "spec" ) || StrEqual( t, "s" ) ? TFTeam_Spectator
-         : StrEqual( t, "red" )       || StrEqual( t, "r" )                          ? TFTeam_Red
-         : StrEqual( t, "blue" )      || StrEqual( t, "blu" )  || StrEqual( t, "b" ) ? TFTeam_Blue
-                                                                                     : TFTeam_Unassigned;
+TFTeam ParseTeam( c[] team ) {
+    return StrEqual( team, "spectator" ) || StrEqual( team, "spec" ) || StrEqual( team, "s" ) ? TFTeam_Spectator
+         : StrEqual( team, "red" )       || StrEqual( team, "r" )                             ? TFTeam_Red
+         : StrEqual( team, "blue" )      || StrEqual( team, "blu" )  || StrEqual( team, "b" ) ? TFTeam_Blue
+                                                                                              : TFTeam_Unassigned;
 }
 
 // Converts team name string to RED/BLU constants
-i ParseTeamIndex( c[] t ) {
-    return StrEqual( t, "red" ) || StrEqual( t, "r" )                          ? RED
-         : StrEqual( t, "blu" ) || StrEqual( t, "blue" ) || StrEqual( t, "b" ) ? BLU
-                                                                               : -1;
+i ParseTeamIndex( c[] team ) {
+    return StrEqual( team, "red" ) || StrEqual( team, "r" )                             ? RED
+         : StrEqual( team, "blu" ) || StrEqual( team, "blue" ) || StrEqual( team, "b" ) ? BLU
+                                                                                        : -1;
 }
 
 // Enable or disable the backup system based on Steam connection status
@@ -818,13 +799,13 @@ SetBackupSystem( b a ) {
     if ( g_bBackupFOVDB == a ) return;    // Already in desired state
     g_bBackupFOVDB = a;
     // Initialize/clear player tracking arrays
-    for ( i n = 0; n <= MaxClients; n++ ) {
-        g_iPlayerFOV[ n ]     = 0;
-        g_bPlayerTracked[ n ] = false;
-        g_bBackupInfiniteAmmoTracked[ n ] = false;
-        g_bBackupImmunityTracked[ n ] = false;
-        g_bBackupInfiniteAmmo[ n ] = false;
-        g_bBackupImmunity[ n ] = false;
+    FOR_EACH_CLIENT( client ) {
+        g_iPlayerFOV[                 client ] = 0;
+        g_bPlayerTracked[             client ] = false;
+        g_bBackupInfiniteAmmoTracked[ client ] = false;
+        g_bBackupImmunityTracked[     client ] = false;
+        g_bBackupInfiniteAmmo[        client ] = false;
+        g_bBackupImmunity[            client ] = false;
     }
 
     if ( a ) PrintToServer( "Backup system enabled - Steam connection is down" );
@@ -832,22 +813,14 @@ SetBackupSystem( b a ) {
 }
 
 // Respawn frame callback
-pub v RespawnFrame( any userid ) {
-    // Get client from userid and validate
-    i client = GetClientOfUserId( userid );
-    
-    
-    // Validate client is connected and in-game
-    if (client <= 0 || client > MaxClients || !IsClientInGame(client)) return;
-    
-    // Only respawn if on a team and not alive
-    if (GetClientTeam(client) > 1 && !IsPlayerAlive(client)) TF2_RespawnPlayer(client);
+pub v RespawnFrame( any client ) {
+    if (!IsPlayerAlive(client)) TF2_RespawnPlayer(client);
 }
 
 // Command for when resupply key is pressed
 NEW_CMD(CResupplyDn) {
     // Check if resupply is globally enabled
-    if (!g_bResupplyEnabled) return EndCmd(client, "Resupply functionality has been disabled by an administrator.");
+    if (!g_bResupplyEnabled) return EndCmd(client, "Resupply is disabled.");
     
     // Check if client is valid
     if (!IsClientInGame(client)) return EndCmd(client, "You must be in-game to use this command.");
@@ -864,50 +837,38 @@ NEW_CMD(CResupplyDn) {
 
 // Command for when resupply key is released
 NEW_CMD(CResupplyUp) {
-    // Check if resupply is globally enabled
-    if (!g_bResupplyEnabled) return EndCmd(client, "Resupply functionality has been disabled by an administrator.");
-    
     // Check if client is valid
-    if (!IsClientInGame(client)) return EndCmd(client, "You must be in-game to use this command.");
-    
+    if (!IsClientInGame(client)) PH;
+
+    // Check if resupply is globally enabled
+    if (!g_bResupplyEnabled) PH;
+
     // Mark the key as up
     g_bResupplyDn[client] = false;
-    
     PH;
 }
 
 // Try to resupply a player if conditions are met
 v Resupply(i client) {
+    if (!IsValidClientAlive(client)) return;
     // Check if resupply is globally enabled
     if (!g_bResupplyEnabled) return;
     
     // Check if key is down and resupply hasn't been used yet
     if (!g_bResupplyDn[client] || g_bResupplyUp[client]) return;
-    if (!IsPlayerAlive(client)) return;
     
-    i playerTeam = GetClientTeam(client);
-    if (playerTeam <= 1) return;
-    
-    if (!IsClientInSpawn(client)) return;
-    
-    // FAILSAFE: Check distance from nearest spawn point
-    if (!g_bFailsafeTriggered && !CheckResupplyFailsafe(client)) {
-        return; // Failsafe triggered, resupply blocked
-    }
+    if (!IsClientInSpawnroom(client)) return;
     
     TF2_RespawnPlayer(client);
     
     // Reset player velocity to zero
-    f zeroVelocity[3] = {0.0, 0.0, 0.0};
-    TeleportEntity(client, NULL_VECTOR, NULL_VECTOR, zeroVelocity);
+    TeleportEntity(client, NULL_VECTOR, NULL_VECTOR, {0.0, 0.0, 0.0});
     
     g_bResupplyUp[client] = true;
 }
 
 // Check if a player is within the bounds of a brush entity
-b IsInEntityBounds(i client, i entity) {
-    if (!IsValidClient(client) || !IsValidEntity(entity)) return false;
-    
+b IsColliding(i client, i entity) {
     // Get player hull
     f playerMins[3], playerMaxs[3];
     GetClientMins(client, playerMins);
@@ -919,12 +880,10 @@ b IsInEntityBounds(i client, i entity) {
     
     // Calculate player hull bounds in world space
     f playerHullMins[3], playerHullMaxs[3];
-    playerHullMins[0] = playerPos[0] + playerMins[0];
-    playerHullMins[1] = playerPos[1] + playerMins[1];
-    playerHullMins[2] = playerPos[2] + playerMins[2];
-    playerHullMaxs[0] = playerPos[0] + playerMaxs[0];
-    playerHullMaxs[1] = playerPos[1] + playerMaxs[1];
-    playerHullMaxs[2] = playerPos[2] + playerMaxs[2];
+    for (i n = 0; n < 3; n++) {
+        playerHullMins[n] = playerPos[n] + playerMins[n];
+        playerHullMaxs[n] = playerPos[n] + playerMaxs[n];
+    }
     
     // Get entity bounds
     f entityMins[3], entityMaxs[3];
@@ -938,126 +897,83 @@ b IsInEntityBounds(i client, i entity) {
 }
 
 // Check if a player is touching any func_respawnroom entities of their own team
-b IsClientInSpawn(i client) {
-    if (!IsValidClient(client)) return false;
-    
-    i playerTeam = GetClientTeam(client);
-    if (playerTeam <= 1) return false; // Spectator or unassigned
-    
-    // Reset player spawn room tracking
-    g_bIsClientInSpawn[client] = false;
-    for (i s = 0; s < MAX_SPAWN_ROOMS; s++) {
-        g_iPlayerSpawns[client][s] = -1;
-    }
-    
+b IsClientInSpawnroom(i client) {
+    if (IsTooFarFromSpawnpoint(client)) return false;
     // Find all func_respawnroom entities
-    i entity = -1;
-    i spawnCount = 0;
-    while ((entity = FindEntityByClassname(entity, "func_respawnroom")) != -1) {
-        if (IsValidEntity(entity)) {
-            // Check if this spawn room belongs to the player's team
-            i spawnTeam = GetEntProp(entity, Prop_Send, "m_iTeamNum");
-            if (spawnTeam == playerTeam) {
-                // Check if player is within this entity's bounds
-                if (IsInEntityBounds(client, entity)) {
-                    g_bIsClientInSpawn[client] = true;
-                    g_iPlayerSpawns[client][spawnCount] = entity;
-                    spawnCount++;
-                    
-                    // Break if we've reached the maximum number of spawn rooms
-                    if (spawnCount >= MAX_SPAWN_ROOMS) break;
-                }
-            }
+    i spawnroom = -1;
+    while ((spawnroom = FindEntityByClassname(spawnroom, "func_respawnroom")) != -1) {
+        if (IsValidEntity(spawnroom) && GetEntProp(spawnroom, Prop_Send, "m_iTeamNum") == GetClientTeam(client)) {
+            if (IsColliding(client, spawnroom)) return true;
         }
     }
-    return g_bIsClientInSpawn[client];
+    return false;
 }
 
 // Get distance to nearest spawn point of player's team
-f GetNearestSpawnDist(i client) {
-    if (!IsValidClient(client)) return 999999.0;
-    
-    i playerTeam = GetClientTeam(client);
+b IsTooFarFromSpawnpoint(i client) {
     f playerPos[3];
     GetClientAbsOrigin(client, playerPos);
     
-    f nearestDistance = 999999.0;
+    f nearestDistance = 100000.0;
     
     // Find all info_player_teamspawn entities for the player's team
-    i entity = -1;
-    while ((entity = FindEntityByClassname(entity, "info_player_teamspawn")) != -1) {
-        if (IsValidEntity(entity)) {
-            i spawnTeam = GetEntProp(entity, Prop_Send, "m_iTeamNum");
-            if (spawnTeam == playerTeam) {
-                f spawnPos[3];
-                GetEntPropVector(entity, Prop_Send, "m_vecOrigin", spawnPos);
-                f distance = GetVectorDistance(playerPos, spawnPos);
-                if (distance < nearestDistance) {
-                    nearestDistance = distance;
-                }
-            }
-        }
-    }
-    
-    return nearestDistance;
-}
+    i spawn = -1;
+    while ((spawn = FindEntityByClassname(spawn, "info_player_teamspawn")) != -1) {
+        if (!IsValidEntity(spawn)) continue;
 
-// Check resupply failsafe - returns false if failsafe triggers
-b CheckResupplyFailsafe(i client) {
-    f distanceToSpawn = GetNearestSpawnDist(client);
-    
-    // If player is too far from nearest spawn point, trigger failsafe
-    if (distanceToSpawn > RESUPDIST) {
-        g_bFailsafeTriggered = true;
-        g_bResupplyEnabled = false;
-        
-        // Get player name for the message
-        c playerName[MAX_NAME_LENGTH];
-        GetClientName(client, playerName, sizeof(playerName));
-        
-        // Notify all players
-        PrintToChatAll("\x07FF4500[FAILSAFE] \x01Resupply exploit detected! Player %s was %.1f units from spawn (max: %.1f)", playerName, distanceToSpawn, RESUPDIST);
-        PrintToChatAll("\x07FF4500[FAILSAFE] \x01Instant resupply has been automatically disabled.");
-        PrintToChatAll("\x07FF4500[FAILSAFE] \x01Admins can re-enable with: \x07FFFF00sm_enable_resupply 1");
-        
-        // Log the event
-        LogMessage("Resupply failsafe triggered by %L - distance %.1f > %.1f", client, distanceToSpawn, RESUPDIST);
-        
-        return false;
+        i spawnTeam = GetEntProp(spawn, Prop_Send, "m_iTeamNum");
+        if (spawnTeam != GetClientTeam(client)) continue;
+
+        f spawnPos[3];
+        GetEntPropVector(spawn, Prop_Send, "m_vecOrigin", spawnPos);
+
+        f distance = GetVectorDistance(playerPos, spawnPos);
+        if (distance < nearestDistance) nearestDistance = distance;
     }
-    
-    return true;
+    if (nearestDistance < RESUPDIST) return false;
+    else {
+        c name[MAX_NAME_LENGTH];
+        PrintToChatAll("Resupply blocked out of spawn! %s was %.1f units from spawn (max: %.1f)", 
+                       GetClientName(client, name, sizeof(name)), nearestDistance, RESUPDIST);
+        return true;
+    }
 }
 
 // Called when a client disconnects
 pub OnClientDisconnect(i client) {
-    // Reset spawn room tracking
-    g_bIsClientInSpawn[client]  = false;
-    g_bResupplyDn[client]  = false;
-    g_bResupplyUp[client]     = false;
-    g_bImmunity[client]         = false;
-    g_bPendingRestoreHP[client] = false;
-    g_iPreDamageHP[client]      = 0;
-    g_bInfiniteAmmo[client]     = false;
+    g_bResupplyDn[     client] = false;
+    g_bResupplyUp[     client] = false;
+    g_bImmunity[       client] = false;
+    g_bPendingHP[      client] = false;
+    g_iPreDamageHP[    client] = 0;
+    g_bInfiniteAmmo[   client] = false;
     
     // Reset backup tracking for infinite ammo and immunity
     g_bBackupInfiniteAmmoTracked[client] = false;
-    g_bBackupImmunityTracked[client] = false;
-    g_bBackupInfiniteAmmo[client] = false;
-    g_bBackupImmunity[client] = false;
+    g_bBackupImmunityTracked[    client] = false;
+    g_bBackupInfiniteAmmo[       client] = false;
+    g_bBackupImmunity[           client] = false;
     
     // Clean up infinite ammo ArrayList if it exists
     if (g_hOriginalAmmo[client] != null) {
         delete g_hOriginalAmmo[client];
         g_hOriginalAmmo[client] = null;
     }
-    
-    // Clear spawn room entity tracking
-    for (i n = 0; n < MAX_SPAWN_ROOMS; n++) {
-        g_iPlayerSpawns[client][n] = -1;
+}
+
+v SetAmmo(i client, i weapon, i ammo)
+{
+    if (IsValidEntity(weapon))
+    {
+        i offset   = GetEntProp(weapon, Prop_Send, "m_iPrimaryAmmoType", 1)*4;
+        i ammotype = FindSendPropInfo("CTFPlayer", "m_iAmmo") + offset;
+        SetEntData(client, ammotype, ammo, 4, true);
     }
 }
 
+i TF2_GetPlayerMaxHealth(int client) {
+	return GetEntProp(GetPlayerResourceEntity(), Prop_Send, "m_iMaxHealth", _, client);
+}
 
 // ====================================================================================================
 // FORWARDS
@@ -1066,7 +982,7 @@ pub OnClientDisconnect(i client) {
 // Called when a client's cookies have been loaded
 pub v OnClientCookiesCached( i client ) {
     // Steam connection is now available
-    g_bSteamConnected = true;
+    g_bSteamOnline = true;
 
     // If we were using backup system but Steam is now connected, we can disable it
     if ( g_bBackupFOVDB ) SetBackupSystem( false );
@@ -1082,14 +998,14 @@ v SetAmmoCookie(i client, b enabled) {
         c cookie[2];
         IntToString(enabled ? 1 : 0, cookie, sizeof(cookie));
         SetClientCookie(client, g_hCookieInfiniteAmmo, cookie);
-        g_bSteamConnected = true;
+        g_bSteamOnline = true;
         
         // If we were using backup system but Steam is now connected, we can disable it
         if (g_bBackupFOVDB) SetBackupSystem(false);
     } else {
         // Steam is down, use backup system
         if (!g_bBackupFOVDB) SetBackupSystem(true);
-        g_bSteamConnected = false;
+        g_bSteamOnline = false;
         
         // Store in backup system
         g_bBackupInfiniteAmmo[client] = enabled;
@@ -1124,14 +1040,14 @@ v SetImmunityCookie(i client, b enabled) {
         c cookie[2];
         IntToString(enabled ? 1 : 0, cookie, sizeof(cookie));
         SetClientCookie(client, g_hCookieImmunity, cookie);
-        g_bSteamConnected = true;
+        g_bSteamOnline = true;
         
         // If we were using backup system but Steam is now connected, we can disable it
         if (g_bBackupFOVDB) SetBackupSystem(false);
     } else {
         // Steam is down, use backup system
         if (!g_bBackupFOVDB) SetBackupSystem(true);
-        g_bSteamConnected = false;
+        g_bSteamOnline = false;
         
         // Store in backup system
         g_bBackupImmunity[client] = enabled;
@@ -1199,14 +1115,11 @@ pub v GetInitAmmo( i client ) {
 // SDKHooks damage filter: prevent/zero damage if victim is protected or attacker is restricted
 pub Act Hook_OnTakeDamage( i victim, i &attacker, i &inflictor, f &damage, i &damagetype, i &weapon, f damageForce[3], f damagePosition[3], i damagecustom ) {
     if (IsMatch()) PCO;
-    
-    if ( victim >= 1 && victim <= MaxClients && g_bImmunity[ victim ] ) {
-        g_iPreDamageHP[ victim ] = GetClientHealth( victim );
-        g_bPendingRestoreHP[ victim ] = true;
+    if ( g_bImmunity[ victim ] ) {
+        i health = GetClientHealth( victim );
+        g_bPendingHP[ victim ] = true;
         
-        if ( g_iPreDamageHP[ victim ] <= damage ) {
-            damage--;
-        }
+        if ( health <= damage ) damage = health - 1.0;
         PCH;
     }
     if ( attacker >= 1 && attacker <= MaxClients && g_bImmunity[ attacker ] ) {
@@ -1219,10 +1132,10 @@ pub Act Hook_OnTakeDamage( i victim, i &attacker, i &inflictor, f &damage, i &da
 pub v Hook_OnTakeDamagePost( i victim, i attacker, i inflictor, f damage, i damagetype, i weapon, f damageForce[3], f damagePosition[3], i damagecustom ) {
     if (IsMatch()) return;
     
-    if ( victim >= 1 && victim <= MaxClients && g_bPendingRestoreHP[ victim ] ) {
-        g_bPendingRestoreHP[ victim ] = false;
-        if ( IsClientInGame( victim ) && IsPlayerAlive( victim ) ) {
-            SetEntProp( victim, Prop_Send, "m_iHealth", g_iPreDamageHP[ victim ] );
+    if ( g_bPendingHP[ victim ] ) {
+        g_bPendingHP[ victim ] = false;
+        if ( IsValidClientAlive(victim) ) {
+            SetEntityHealth( victim, TF2_GetPlayerMaxHealth(victim) );
         }
     }
 }
