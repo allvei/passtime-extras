@@ -15,7 +15,6 @@
 | sm_enable_respawn  | sm_resp   | `0/1`     |Enable instant respawn               |
 | sm_enable_immunity | sm_imm    | `0/1`     |Enable immunity and infinite ammo    |
 | sm_enable_saveload | sm_sl     | `0/1`     |Enable save/load spawn functionality |
-| sm_plugin_status   | sm_ps     | -         |Show current plugin feature status   |
 
 ### Client commands
 
@@ -28,3 +27,11 @@
 | sm_fov          | -         | `70-120`  | Set your field of view             |
 | +sm_resupply    | -         | -         | Instant resupply when inside spawn |
 | +sm_pt_resupply | -         | -         | Instant resupply when inside spawn |
+
+### Console variables for the server
+
+| command         | default | description                     |
+|-----------------|---------|---------------------------------|
+| sm_fov_min      | `70`    | Minimum client field of view    |
+| sm_fov_max      | `120`   | Maximum client field of view    |
+| sm_respawn_time | `0.0`   | Player respawn delay in seconds |
