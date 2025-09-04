@@ -578,11 +578,6 @@ NEW_CMD(CToggleResupply) {
     
     g_bResupplyEnabled = (value != 0);
     
-    // Reset failsafe when manually enabling
-    if (g_bResupplyEnabled) {
-        g_bFailsafeTriggered = false;
-    }
-    
     return EndCmd(client, "Resupply functionality %s", g_bResupplyEnabled ? "ENABLED" : "DISABLED");
 }
 
