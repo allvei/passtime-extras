@@ -11,17 +11,16 @@
 #include <sdktools_entoutput>
 #include <sdkhooks>
 
-
 #pragma semicolon 1
 
 // Constants
-#define RED             0
-#define BLU             1
-#define TEAM_OFFSET     2
-#define EDICT           2048
-#define MAXSPAWNS 4
-#define MAXSLOTS       2
-#define RESUPDIST       512.0 // Max dist from spawn resupply can be used
+#define RED         0
+#define BLU         1
+#define TEAM_OFFSET 2
+#define EDICT       2048
+#define MAXSPAWNS   4
+#define MAXSLOTS    2
+#define RESUPDIST   512.0 // Max dist from spawn resupply can be used
 
 // MACROS
 #define PCH   return Plugin_Changed
@@ -56,8 +55,8 @@ public Plugin myinfo = {
     name        = "passtime.tf extras",
     author      = "xCape",
     description = "Plugin for use in passtime.tf servers",
-    version     = "1.5",
-    url         = "https://github.com/allvei/passtime-extras"
+    version     = "1.6",
+    url         = "https://github.com/allvei/passtime-extras/"
 }
 
 // Handles
@@ -108,8 +107,6 @@ b g_bResupplyEnabled       = true;
 b g_bInstantRespawnEnabled = true;
 b g_bImmunityAmmoEnabled   = true;
 b g_bSaveEnabled           = true;
-
-b g_bFailsafeTriggered = false; // Track if failsafe has been triggered
 
 i g_iSavedClip1[    MAXSLOTS];
 i g_iSavedClip2[    MAXSLOTS];
@@ -741,7 +738,7 @@ Act EndCmd( i client, const c[] format, any... ) {
     VFormat( buffer, sizeof( buffer ), format, 3 );
     Reply( client, "%s", buffer );
     PH;
-}   
+}
 
 // Checks if a client in-game, connected, not fake, and in a valid team
 b IsValidClient( i client ) {
@@ -796,7 +793,7 @@ i ParseTeamIndex( c[] team ) {
 
 // Enable or disable the backup system based on Steam connection status
 SetBackupSystem( b a ) {
-    if ( g_bBackupFOVDB == a ) return;    // Already in desired state
+    if ( g_bBackupFOVDB == a ) return; // Already in desired state
     g_bBackupFOVDB = a;
     // Initialize/clear player tracking arrays
     FOR_EACH_CLIENT( client ) {
@@ -941,12 +938,12 @@ b IsTooFarFromSpawnpoint(i client) {
 
 // Called when a client disconnects
 pub OnClientDisconnect(i client) {
-    g_bResupplyDn[     client] = false;
-    g_bResupplyUp[     client] = false;
-    g_bImmunity[       client] = false;
-    g_bPendingHP[      client] = false;
-    g_iPreDamageHP[    client] = 0;
-    g_bInfiniteAmmo[   client] = false;
+    g_bResupplyDn[   client] = false;
+    g_bResupplyUp[   client] = false;
+    g_bImmunity[     client] = false;
+    g_bPendingHP[    client] = false;
+    g_iPreDamageHP[  client] = 0;
+    g_bInfiniteAmmo[ client] = false;
     
     // Reset backup tracking for infinite ammo and immunity
     g_bBackupInfiniteAmmoTracked[client] = false;
@@ -1134,8 +1131,6 @@ pub v Hook_OnTakeDamagePost( i victim, i attacker, i inflictor, f damage, i dama
     
     if ( g_bPendingHP[ victim ] ) {
         g_bPendingHP[ victim ] = false;
-        if ( IsValidClientAlive(victim) ) {
-            SetEntityHealth( victim, TF2_GetPlayerMaxHealth(victim) );
-        }
+        if ( IsValidClientAlive(victim) ) SetEntityHealth( victim, TF2_GetPlayerMaxHealth(victim) );
     }
 }
