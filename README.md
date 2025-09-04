@@ -2,8 +2,8 @@
 
 | command            | shortform | arguments        | description                    |
 |--------------------|-----------|------------------|--------------------------------|
-| sm_setteam         | sm_st     | `client` `team`  |Set the targets team            |
-| sm_setclass        | sm_sc     | `client` `class` |Set the target class            |
+| sm_setteam         | sm_st     | `client` `team`  |Set the target's team           |
+| sm_setclass        | sm_sc     | `client` `class` |Set the target's class          |
 | sm_ready           | sm_rdy    | `team` `0/1`     |Set a team's ready status       |
 | sm_debug_roundtime | sm_drt    | -                |Print the team_round_timer info |
 
