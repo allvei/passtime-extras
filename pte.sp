@@ -890,12 +890,12 @@ b IsColliding(i client, i entity) {
 
 // Check if a player is touching any func_respawnroom entities of their own team
 b IsClientInSpawnroom(i client) {
-    if (IsTooFarFromSpawnpoint(client)) return false;
     // Find all func_respawnroom entities
     i spawnroom = -1;
     while ((spawnroom = FindEntityByClassname(spawnroom, "func_respawnroom")) != -1) {
-        if (IsValidEntity(spawnroom) && GetEntProp(spawnroom, Prop_Send, "m_iTeamNum") == GetClientTeam(client)) {
-            if (IsColliding(client, spawnroom)) return true;
+        if (IsValidEntity(spawnroom) && GetEntProp(spawnroom, Prop_Send, "m_iTeamNum") == GetClientTeam(client) && IsColliding(client, spawnroom)) {
+            if (IsTooFarFromSpawnpoint(client)) return false;
+            return true;
         }
     }
     return false;
