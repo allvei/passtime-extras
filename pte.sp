@@ -10,6 +10,7 @@
 #include <sdktools_trace>
 #include <sdktools_entoutput>
 #include <sdkhooks>
+#include <tf2attributes>
 
 #pragma semicolon 1
 
@@ -50,12 +51,13 @@
 #define NEW_EV(%1)      pub %1( Ev event, const c[] name, b dontBroadcast )
 #define STRCP(%1,%2)    strcopy(%1, sizeof(%1), %2)
 #define FOR_EACH_CLIENT(%1) for ( i %1 = 1; %1 <= MaxClients; %1++ )
+#define FOR_EACH_ENT(%1) for ( i %1 = 1; %1 <= EDICT; %1++ )
 
 public Plugin myinfo = {
     name        = "passtime.tf extras",
     author      = "xCape",
     description = "Plugin for use in passtime.tf servers",
-    version     = "1.6.1",
+    version     = "1.7.0",
     url         = "https://github.com/allvei/passtime-extras/"
 }
 
@@ -142,6 +144,12 @@ pub OnPluginStart() {
     RCC( "-sm_resupply",    CResupplyUp,   "Resupply inside spawn" );
     RCC( "+sm_pt_resupply", CResupplyDn,   "Resupply inside spawn" );
     RCC( "-sm_pt_resupply", CResupplyUp,   "Resupply inside spawn" );
+    RCC( "sm_findent",      CFindEnt,      "Find entity by classname" );
+    RCC( "sm_fe",           CFindEnt,      "Find entity by classname" );
+    RCC( "sm_applyattrib",  CAppAtt,       "Apply attributes to entity" );
+    RCC( "sm_aa",           CAppAtt,       "Apply attributes to entity" );
+    RCC( "sm_removeattrib", CRemAtt,       "Remove attributes from entity" );
+    RCC( "sm_ra",           CRemAtt,       "Remove attributes from entity" );
 
     g_hCookieFOV          = RegClientCookie( "sm_fov_cookie",          "Desired client field of view", CookieAccess_Private );
     g_hCookieInfiniteAmmo = RegClientCookie( "sm_infiniteammo_cookie", "Infinite ammo setting",        CookieAccess_Private );
@@ -212,11 +220,13 @@ pub v OnGameFrame() {
 
             SetEntProp( weapon, Prop_Send, "m_iClip1", 19 );
             SetAmmo(client, weapon, 84);
-        }
 
-        // Check for buffered resupply (only if globally enabled)
-        if (g_bResupplyEnabled && g_bResupplyDn[client] && !g_bResupplyUp[client] && IsClientInSpawnroom(client)) {
-            Resupply(client);
+            // Check for buffered resupply (only if globally enabled)
+            if (g_bResupplyEnabled && g_bResupplyDn[client] && !g_bResupplyUp[client] && IsClientInSpawnroom(client)) {
+                Resupply(client);
+            }
+            if (TF2_GetPlayerClass(client) == TFClass_DemoMan) TF2Attrib_SetByName(client, "dmg taken from blast reduced", 1.25);
+            else TF2Attrib_RemoveByName(client, "dmg taken from blast reduced");
         }
     }
 }
@@ -257,6 +267,64 @@ b IsMatch() {
 // ====================================================================================================
 // COMMANDS
 // ====================================================================================================
+
+NEW_CMD(CFindEnt) {
+    // Check if classname argument is provided
+    if (args < 1) return EndCmd(client, "Usage: sm_findent <classname>");
+    
+    c classname[64];
+    GetCmdArg(1, classname, sizeof(classname));
+    
+    i ent = FindEntityByClassname(-1, classname);
+    if (ent != -1) {
+        PrintToChatAll("%s found! ID: %d", classname, ent);
+    } else {
+        PrintToChatAll("No entity found with classname: %s", classname);
+    }
+    PH;
+}
+
+NEW_CMD(CAppAtt) {
+    // Check if all required arguments are provided
+    if (args < 3) return EndCmd(client, "Usage: sm_applyattrib <entID> \"attribute name\" <value>");
+    
+    c entIdStr[16], attrName[64], valueStr[32];
+    GetCmdArg(1, entIdStr, sizeof(entIdStr));
+    GetCmdArg(2, attrName, sizeof(attrName));
+    GetCmdArg(3, valueStr, sizeof(valueStr));
+    
+    i entId = StringToInt(entIdStr);
+    f value = StringToFloat(valueStr);
+    
+    if (!IsValidEntity(entId)) return EndCmd(client, "Invalid entity ID: %d", entId);
+    
+    if (TF2Attrib_SetByName(entId, attrName, value)) {
+        Reply(client, "Applied attribute '%s' with value %.2f to entity %d", attrName, value, entId);
+    } else {
+        Reply(client, "Failed to apply attribute '%s' to entity %d", attrName, entId);
+    }
+    PH;
+    
+}
+
+NEW_CMD(CRemAtt) {
+    // Check if all required arguments are provided
+    if (args < 2) return EndCmd(client, "Usage: sm_removeattrib <entID> \"attribute name\"");
+    
+    c entIdStr[16], attrName[64];
+    GetCmdArg(1, entIdStr, sizeof(entIdStr));
+    GetCmdArg(2, attrName, sizeof(attrName));
+    
+    i entId = StringToInt(entIdStr);
+    
+    if (!IsValidEntity(entId)) return EndCmd(client, "Invalid entity ID: %d", entId);
+    if (TF2Attrib_RemoveByName(entId, attrName)) {
+        Reply(client, "Removed attribute '%s' from entity %d", attrName, entId);
+    } else {
+        Reply(client, "Failed to remove attribute '%s' from entity %d", attrName, entId);
+    }
+    PH;
+}
 
 // Command to set a team's ready status
 NEW_CMD(CReady) {
@@ -677,7 +745,7 @@ NEW_EV(EPDisconnect) {
 NEW_EV(EPSpawn) {
     i client = GetClientOfUserId( event.GetInt( "userid" ) );
     if ( !IsValidClient( client ) ) return;
-
+    
     // Try to restore settings from cookies first
     if ( AreClientCookiesCached( client ) ) {
         if ( GetFOVCookie( client ) ) {
