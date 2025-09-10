@@ -226,7 +226,7 @@ pub v OnGameFrame() {
                 Resupply(client);
             }
             if (TF2_GetPlayerClass(client) == TFClass_DemoMan) TF2Attrib_SetByName(client, "dmg taken from blast reduced", 1.25);
-            else TF2Attrib_RemoveByName(client, "dmg taken from blast reduced");
+            else TF2Attrib_SetByName(client, "dmg taken from blast reduced", 1.0);
         }
     }
 }
