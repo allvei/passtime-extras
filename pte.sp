@@ -109,7 +109,7 @@ b g_bResupplyEnabled       = true;
 b g_bInstantRespawnEnabled = true;
 b g_bImmunityAmmoEnabled   = true;
 b g_bSaveEnabled           = true;
-b g_bDemoResistEnabled       = true;
+b g_bDemoResistEnabled     = false;
 
 i g_iSavedClip1[    MAXSLOTS];
 i g_iSavedClip2[    MAXSLOTS];
