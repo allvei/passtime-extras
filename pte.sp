@@ -57,7 +57,7 @@ public Plugin myinfo = {
     name        = "passtime.tf extras",
     author      = "xCape",
     description = "Plugin for use in passtime.tf servers",
-    version     = "1.7.1",
+    version     = "1.7.2",
     url         = "https://github.com/allvei/passtime-extras/"
 }
 
