@@ -109,7 +109,7 @@ b g_bResupplyEnabled       = true;
 b g_bInstantRespawnEnabled = true;
 b g_bImmunityAmmoEnabled   = true;
 b g_bSaveEnabled           = true;
-b g_bDemoVulnEnabled       = true;
+b g_bDemoResistEnabled       = true;
 
 i g_iSavedClip1[    MAXSLOTS];
 i g_iSavedClip2[    MAXSLOTS];
@@ -118,23 +118,23 @@ i g_iSavedAmmoCount[MAXSLOTS][2];
 
 pub OnPluginStart() {
     // Admin commands
-    RAC( "sm_setteam",         CSetTeam,        GENERIC, "Set a client's team" );
-    RAC( "sm_st",              CSetTeam,        GENERIC, "Set a client's team" );
-    RAC( "sm_setclass",        CSetClass,       GENERIC, "Set a client's class" );
-    RAC( "sm_sc",              CSetClass,       GENERIC, "Set a client's class" );
-    RAC( "sm_ready",           CReady,          GENERIC, "Set a team's ready status" );
-    RAC( "sm_rdy",             CReady,          GENERIC, "Set a team's ready status" );
-    RAC( "sm_debug_roundtime", CDebugRoundTime, GENERIC, "Debug: print team_round_timer info" );
-    RAC( "sm_drt",             CDebugRoundTime, GENERIC, "Debug: print team_round_timer info" );
-    RAC( "sm_enable_resupply", CToggleResupply, GENERIC, "Toggle resupply functionality" );
-    RAC( "sm_enable_respawn",  CToggleRespawn,  GENERIC, "Toggle instant respawn" );
-    RAC( "sm_enable_immunity", CToggleImmunity, GENERIC, "Toggle immunity and infinite ammo" );
-    RAC( "sm_enable_saveload", CToggleSave,     GENERIC, "Toggle save/load spawn functionality" );
-    RAC( "sm_enable_demovuln", CToggleDemoVuln, GENERIC, "Toggle demo blast vulnerability" );
-    RAC( "sm_debug_classes",   CDebugClasses,   GENERIC, "Debug: print all player classes" );
-    RAC( "sm_dbc",             CDebugClasses,   GENERIC, "Debug: print all player classes" );
-    RAC( "sm_checkatt",        CCheckAtt,       GENERIC, "Debug: check entity attributes" );
-    RAC( "sm_ca",              CCheckAtt,       GENERIC, "Debug: check entity attributes" );
+    RAC( "sm_setteam",            CSetTeam,          GENERIC, "Set a client's team" );
+    RAC( "sm_st",                 CSetTeam,          GENERIC, "Set a client's team" );
+    RAC( "sm_setclass",           CSetClass,         GENERIC, "Set a client's class" );
+    RAC( "sm_sc",                 CSetClass,         GENERIC, "Set a client's class" );
+    RAC( "sm_ready",              CReady,            GENERIC, "Set a team's ready status" );
+    RAC( "sm_rdy",                CReady,            GENERIC, "Set a team's ready status" );
+    RAC( "sm_debug_roundtime",    CDebugRoundTime,   GENERIC, "Debug: print team_round_timer info" );
+    RAC( "sm_drt",                CDebugRoundTime,   GENERIC, "Debug: print team_round_timer info" );
+    RAC( "sm_enable_resupply",    CToggleResupply,   GENERIC, "Toggle resupply functionality" );
+    RAC( "sm_enable_respawn",     CToggleRespawn,    GENERIC, "Toggle instant respawn" );
+    RAC( "sm_enable_immunity",    CToggleImmunity,   GENERIC, "Toggle immunity and infinite ammo" );
+    RAC( "sm_enable_saveload",    CToggleSave,       GENERIC, "Toggle save/load spawn functionality" );
+    RAC( "sm_enable_demoresist",  CToggleDemoResist, GENERIC, "Toggle demo blast vulnerability" );
+    RAC( "sm_debug_classes",      CDebugClasses,     GENERIC, "Debug: print all player classes" );
+    RAC( "sm_dbc",                CDebugClasses,     GENERIC, "Debug: print all player classes" );
+    RAC( "sm_checkatt",           CCheckAtt,         GENERIC, "Debug: check entity attributes" );
+    RAC( "sm_ca",                 CCheckAtt,         GENERIC, "Debug: check entity attributes" );
 
     // Console commands
     RCC( "sm_save",         CSaveSpawn,    "Save a spawn point" );
@@ -215,27 +215,28 @@ pub OnPluginStart() {
 
 pub v OnGameFrame() {
     FOR_EACH_CLIENT( client ) {
-        // Check for infinite ammo players (excluding medics) and if globally enabled
-        if ( IsValidClientAlive( client ) && g_bInfiniteAmmo[ client ] && g_bImmunityAmmoEnabled && !IsMatch()) {
-            // Skip medics
-            if (TF2_GetPlayerClass(client) == TFClass_Medic) continue;
-
+        if ( !IsValidClientAlive( client ) ) continue;
+        
+        // Apply demo blast resistance if feature is enabled
+        if (!g_bDemoResistEnabled && TF2_GetPlayerClass(client) == TFClass_DemoMan) {
+            TF2Attrib_SetByName(client, "dmg taken from blast reduced", 1.25);
+        } else {
+            TF2Attrib_SetByName(client, "dmg taken from blast reduced", 1.0);
+        }
+        
+        // Handle infinite ammo (excluding medics)
+        if ( !IsMatch() && g_bImmunityAmmoEnabled && g_bInfiniteAmmo[ client ] && TF2_GetPlayerClass(client) != TFClass_Medic ) {
             // Get the active weapon
             i weapon = GetEntPropEnt( client, Prop_Send, "m_hActiveWeapon" );
-            if ( weapon == -1 || !IsValidEntity( weapon ) ) continue;
-
-            SetEntProp( weapon, Prop_Send, "m_iClip1", 19 );
-            SetAmmo(client, weapon, 84);
-
-            // Check for buffered resupply (only if globally enabled)
-            if (g_bResupplyEnabled && g_bResupplyDn[client] && !g_bResupplyUp[client] && IsClientInSpawnroom(client)) {
-                Resupply(client);
+            if ( weapon != -1 && IsValidEntity( weapon ) ) {
+                SetEntProp( weapon, Prop_Send, "m_iClip1", 19 );
+                SetAmmo( client, weapon, 84 );
             }
-
-            if (g_bDemoVulnEnabled) {
-                if (TF2_GetPlayerClass(client) == TFClass_DemoMan) TF2Attrib_SetByName(client, "dmg taken from blast reduced", 1.25);
-                else TF2Attrib_SetByName(client, "dmg taken from blast reduced", 1.0);
-            }
+        }
+        
+        // Check for buffered resupply (only if globally enabled)
+        if (g_bResupplyEnabled && g_bResupplyDn[client] && !g_bResupplyUp[client] && IsClientInSpawnroom(client)) {
+            Resupply(client);
         }
     }
 }
@@ -727,19 +728,19 @@ NEW_CMD(CToggleSave) {
 }
 
 // Backup toggle for demo blast vulnerability
-NEW_CMD(CToggleDemoVuln) {
-    if (args != 1) return EndCmd(client, "Usage: sm_enable_demovuln <0|1>");
+NEW_CMD(CToggleDemoResist) {
+    if (args != 1) return EndCmd(client, "Usage: sm_enable_demoresist <0|1>");
     
     c arg[4];
     GetCmdArg(1, arg, sizeof(arg));
     i value = StringToInt(arg);
     
-    if (value != 0 && value != 1) return EndCmd(client, "Usage: sm_enable_demovuln <0|1> (0=disable, 1=enable)");
+    if (value != 0 && value != 1) return EndCmd(client, "Usage: sm_enable_demoresist <0|1>");
     
-    g_bDemoVulnEnabled = (value != 0);
+    g_bDemoResistEnabled = (value != 0);
     
     // If disabling, remove blast vulnerability attributes from all players
-    if (!g_bDemoVulnEnabled) {
+    if (g_bDemoResistEnabled) {
         FOR_EACH_CLIENT( n ) {
             if (IsClientInGame(n)) {
                 TF2Attrib_RemoveByName(n, "dmg taken from blast reduced");
@@ -747,7 +748,7 @@ NEW_CMD(CToggleDemoVuln) {
         }
     }
     
-    return EndCmd(client, "Demo blast vulnerability %s", g_bDemoVulnEnabled ? "ENABLED" : "DISABLED");
+    return EndCmd(client, "Demo blast vulnerability %s", g_bDemoResistEnabled ? "ENABLED" : "DISABLED");
 }
 
 // Debug command to print player classes and attributes
