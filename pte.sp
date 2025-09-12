@@ -109,6 +109,7 @@ b g_bResupplyEnabled       = true;
 b g_bInstantRespawnEnabled = true;
 b g_bImmunityAmmoEnabled   = true;
 b g_bSaveEnabled           = true;
+b g_bDemoVulnEnabled       = true;
 
 i g_iSavedClip1[    MAXSLOTS];
 i g_iSavedClip2[    MAXSLOTS];
@@ -129,6 +130,11 @@ pub OnPluginStart() {
     RAC( "sm_enable_respawn",  CToggleRespawn,  GENERIC, "Toggle instant respawn" );
     RAC( "sm_enable_immunity", CToggleImmunity, GENERIC, "Toggle immunity and infinite ammo" );
     RAC( "sm_enable_saveload", CToggleSave,     GENERIC, "Toggle save/load spawn functionality" );
+    RAC( "sm_enable_demovuln", CToggleDemoVuln, GENERIC, "Toggle demo blast vulnerability" );
+    RAC( "sm_debug_classes",   CDebugClasses,   GENERIC, "Debug: print all player classes" );
+    RAC( "sm_dbc",             CDebugClasses,   GENERIC, "Debug: print all player classes" );
+    RAC( "sm_checkatt",        CCheckAtt,       GENERIC, "Debug: check entity attributes" );
+    RAC( "sm_ca",              CCheckAtt,       GENERIC, "Debug: check entity attributes" );
 
     // Console commands
     RCC( "sm_save",         CSaveSpawn,    "Save a spawn point" );
@@ -225,8 +231,11 @@ pub v OnGameFrame() {
             if (g_bResupplyEnabled && g_bResupplyDn[client] && !g_bResupplyUp[client] && IsClientInSpawnroom(client)) {
                 Resupply(client);
             }
-            if (TF2_GetPlayerClass(client) == TFClass_DemoMan) TF2Attrib_SetByName(client, "dmg taken from blast reduced", 1.25);
-            else TF2Attrib_SetByName(client, "dmg taken from blast reduced", 1.0);
+
+            if (g_bDemoVulnEnabled) {
+                if (TF2_GetPlayerClass(client) == TFClass_DemoMan) TF2Attrib_SetByName(client, "dmg taken from blast reduced", 1.25);
+                else TF2Attrib_SetByName(client, "dmg taken from blast reduced", 1.0);
+            }
         }
     }
 }
@@ -396,7 +405,7 @@ NEW_CMD(CSetTeam) {
 
         Reply( client, "Switched %s to %s", target_name, team_name );
     }
-    PH;
+    PH; 
 }
 
 // Set your field of view
@@ -591,6 +600,15 @@ TFClassType ParseClass( c[] s ) {
     return TFClass_Unknown;
 }
 
+void GetClassString(TFClassType id, c[] buffer, i maxlength) {
+    switch (id) {
+        case TFClass_Soldier:  strcopy(buffer, maxlength, "soldier");
+        case TFClass_DemoMan:  strcopy(buffer, maxlength, "demoman");
+        case TFClass_Medic:    strcopy(buffer, maxlength, "medic");
+        default: strcopy(buffer, maxlength, "unknown");
+    }
+}
+
 NEW_CMD(CDebugRoundTime) {
     i ent   = -1;
     i found = 0;
@@ -706,6 +724,87 @@ NEW_CMD(CToggleSave) {
     g_bSaveEnabled = (value != 0);
     
     return EndCmd(client, "Save/Load spawn functionality %s", g_bSaveEnabled ? "ENABLED" : "DISABLED");
+}
+
+// Backup toggle for demo blast vulnerability
+NEW_CMD(CToggleDemoVuln) {
+    if (args != 1) return EndCmd(client, "Usage: sm_enable_demovuln <0|1>");
+    
+    c arg[4];
+    GetCmdArg(1, arg, sizeof(arg));
+    i value = StringToInt(arg);
+    
+    if (value != 0 && value != 1) return EndCmd(client, "Usage: sm_enable_demovuln <0|1> (0=disable, 1=enable)");
+    
+    g_bDemoVulnEnabled = (value != 0);
+    
+    // If disabling, remove blast vulnerability attributes from all players
+    if (!g_bDemoVulnEnabled) {
+        FOR_EACH_CLIENT( n ) {
+            if (IsClientInGame(n)) {
+                TF2Attrib_RemoveByName(n, "dmg taken from blast reduced");
+            }
+        }
+    }
+    
+    return EndCmd(client, "Demo blast vulnerability %s", g_bDemoVulnEnabled ? "ENABLED" : "DISABLED");
+}
+
+// Debug command to print player classes and attributes
+NEW_CMD(CDebugClasses) {
+    if (args < 1) return EndCmd(client, "Usage: sm_debug_classes <#userid|name>");
+    
+    // Parse target argument
+    c target[33];
+    GetCmdArg(1, target, sizeof(target));
+    
+    i target_list[MAXPLAYERS];
+    c target_name[MAX_TARGET_LENGTH];
+    b tn_is_ml = false;
+    i target_count = ProcessTargetString(target, client, target_list, MAXPLAYERS, COMMAND_FILTER_CONNECTED, target_name, sizeof(target_name), tn_is_ml);
+    
+    if (target_count == COMMAND_TARGET_NONE) PH;
+    
+    Reply(client, "=== Player Class & Attribute Debug ===");
+    
+    for (i n = 0; n < target_count; n++) {
+        i targetClient = target_list[n];
+        if (IsClientInGame(targetClient)) {
+            c className[16];
+            c name[64];
+            TFClassType classID = TF2_GetPlayerClass(targetClient);
+            GetClassString(classID, className, sizeof(className));
+            GetClientName(targetClient, name, sizeof(name));
+            
+            f blastReduction = TF2Attrib_GetValue(TF2Attrib_GetByName(targetClient, "dmg taken from blast reduced"));
+            
+            Reply(client, "%s: class ID %d (%s)", name, classID, className);
+            Reply(client, "  - Blast damage reduction: %.2f", blastReduction);
+        }
+    }
+    
+    PH;
+}
+
+// Debug command to check entity attributes
+NEW_CMD(CCheckAtt) {
+    if (args < 2) return EndCmd(client, "Usage: sm_checkatt <ent_id> <prop_name>");
+    
+    c entIdStr[16];
+    GetCmdArg(1, entIdStr, sizeof(entIdStr));
+    i entId = StringToInt(entIdStr);
+    
+    c propName[64];
+    GetCmdArg(2, propName, sizeof(propName));
+    
+    if (!IsValidEntity(entId)) return EndCmd(client, "Invalid entity ID: %d", entId);
+
+    // Check if the entity has attributes
+    Reply(client, "Entity %d: %s '%s'",
+          entId,
+          HasEntProp(entId, Prop_Send, propName) ? "Has" : "Doesn't have",
+          propName); 
+    PH;
 }
 
 // ====================================================================================================

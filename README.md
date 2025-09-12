@@ -1,22 +1,31 @@
-### Admin commands
+# passtime.tf extras
 
-| command            | shortform | arguments        | description                    |
-|--------------------|-----------|------------------|--------------------------------|
-| sm_setteam         | sm_st     | `client` `team`  |Set the target's team           |
-| sm_setclass        | sm_sc     | `client` `class` |Set the target's class          |
-| sm_ready           | sm_rdy    | `team` `0/1`     |Set a team's ready status       |
-| sm_debug_roundtime | sm_drt    | -                |Print the team_round_timer info |
+## Dependencies
 
-### Backup admin commands
+- [TF2 Attributes](https://github.com/FlaminSarge/tf2attributes) by FlaminSarge
 
-| command            | shortform | arguments | description                         |
-|--------------------|-----------|-----------|-------------------------------------|
-| sm_enable_resupply | sm_res    | `0/1`     |Enable resupply functionality        |
-| sm_enable_respawn  | sm_resp   | `0/1`     |Enable instant respawn               |
-| sm_enable_immunity | sm_imm    | `0/1`     |Enable immunity and infinite ammo    |
-| sm_enable_saveload | sm_sl     | `0/1`     |Enable save/load spawn functionality |
+## Commands
 
-### Client commands
+### Admin
+
+| command            | shortform | arguments        | description                     |
+|--------------------|-----------|------------------|---------------------------------|
+| sm_setteam         | sm_st     | `client` `team`  | Set the target's team           |
+| sm_setclass        | sm_sc     | `client` `class` | Set the target's class          |
+| sm_ready           | sm_rdy    | `team` `0/1`     | Set a team's ready status       |
+| sm_debug_roundtime | sm_drt    | -                | Print the team_round_timer info |
+
+### Backup admin
+
+| command            | arguments | description                          |
+|--------------------|-----------|--------------------------------------|
+| sm_enable_resupply | `0/1`     | Enable resupply functionality        |
+| sm_enable_respawn  | `0/1`     | Enable instant respawn               |
+| sm_enable_immunity | `0/1`     | Enable immunity and infinite ammo    |
+| sm_enable_saveload | `0/1`     | Enable save/load spawn functionality |
+| sm_enable_demovuln | `0/1`     | Enable demo blast vulnerability      |
+
+### Client
 
 | command         | shortform | arguments | description                        |
 |-----------------|-----------|-----------|------------------------------------|
@@ -28,7 +37,7 @@
 | +sm_resupply    | -         | -         | Instant resupply when inside spawn |
 | +sm_pt_resupply | -         | -         | Instant resupply when inside spawn |
 
-### Console variables for the server
+### Server console variables
 
 | command         | default | description                     |
 |-----------------|---------|---------------------------------|
