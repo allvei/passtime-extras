@@ -140,6 +140,7 @@ pub OnPluginStart() {
     CCS( "sm_immune",            "sm_i",    CImmune,           "Toggle immunity" );
     CCS( "sm_ammo",              "sm_a",    CInfiniteAmmo,     "Toggle infinite ammo" );
     CCS( "sm_fov",               "sm_fov",  CSetFOV,           "Set your field of view." );
+    CCS( "sm_diceroll",          "sm_dice", CDice,             "Select a random player from targets" );
     CC(  "+sm_resupply",                    CResupplyDn,       "Resupply inside spawn" );
     CC(  "-sm_resupply",                    CResupplyUp,       "Resupply inside spawn" );
     CC(  "+sm_pt_resupply",                 CResupplyDn,       "Resupply inside spawn" );
@@ -524,20 +525,183 @@ NEW_CMD(CSetClass) {
     PH;
 }
 
+// Spin the wheel - select a random player from targets or custom strings
+NEW_CMD(CDice) {
+    // Check if we have at least one argument (target specification)
+    if (args < 1) return EndCmd(client, "Usage: sm_spin <\"customstring\" | #userid | playername | @team>");
+
+    // Debug: Print all arguments
+    c debugArgs[256];
+    GetCmdArgString(debugArgs, sizeof(debugArgs));
+
+    c customStrings[10][64]; // Support up to 10 custom strings
+    c playerTargetArgs[256]; // Build target string for player selection
+    i customCount = 0;
+    b hasPlayerTargets = false;
+
+    // Get the full command string and parse manually
+    c fullCmd[256];
+    GetCmdArgString(fullCmd, sizeof(fullCmd));
+
+    // Remove "sm_spin " prefix to get just the arguments
+    ReplaceString(fullCmd, sizeof(fullCmd), "sm_spin ", "");
+
+
+    // Parse arguments manually, respecting quotes
+    i pos = 0;
+    i len = strlen(fullCmd);
+
+    while (pos < len) {
+        // Skip leading spaces
+        while (pos < len && (fullCmd[pos] == ' ' || fullCmd[pos] == '\t')) {
+            pos++;
+        }
+        
+        if (pos >= len) break;
+
+        c arg[64];
+        i argLen = 0;
+
+        if (fullCmd[pos] == '"') {
+            // Quoted string - find the closing quote
+            pos++; // Skip opening quote
+            i startPos = pos;
+            
+            while (pos < len && fullCmd[pos] != '"') {
+                pos++;
+            }
+            
+            if (pos < len) {
+                // Found closing quote
+                argLen = pos - startPos;
+                strcopy(arg, sizeof(arg), fullCmd[startPos]);
+                arg[argLen] = '\0';
+                pos++; // Skip closing quote
+                
+                // This is a custom string
+                strcopy(customStrings[customCount], sizeof(customStrings[]), arg);
+                customCount++;
+            } else {
+                // No closing quote found - treat as regular argument
+                strcopy(arg, sizeof(arg), fullCmd[startPos-1]); // Include the opening quote
+                arg[len - startPos + 1] = '\0';
+                
+                if (strlen(playerTargetArgs) > 0) StrCat(playerTargetArgs, sizeof(playerTargetArgs), " ");
+                StrCat(playerTargetArgs, sizeof(playerTargetArgs), arg);
+                hasPlayerTargets = true;
+                break;
+            }
+        } else {
+            // Regular argument - read until space
+            i startPos = pos;
+            
+            while (pos < len && fullCmd[pos] != ' ' && fullCmd[pos] != '\t') {
+                pos++;
+            }
+            
+            argLen = pos - startPos;
+            strcopy(arg, sizeof(arg), fullCmd[startPos]);
+            arg[argLen] = '\0';
+            
+            // This is a player target
+            if (strlen(playerTargetArgs) > 0) StrCat(playerTargetArgs, sizeof(playerTargetArgs), " ");
+            StrCat(playerTargetArgs, sizeof(playerTargetArgs), arg);
+            hasPlayerTargets = true;
+        }
+    }
+
+    if (hasPlayerTargets) {
+    }
+
+    if (customCount > 0 && !hasPlayerTargets) {
+        // All arguments are custom strings - select random custom string
+        i random_index = GetRandomInt(0, customCount - 1);
+        c selected_option[64];
+        strcopy(selected_option, sizeof(selected_option), customStrings[random_index]);
+
+        // Print result to all chat
+        PrintToChatAll("Spun the wheel and chose %s", selected_option);
+    } else if (hasPlayerTargets) {
+        // Handle player targets - need to process each target individually and combine results
+        
+        i allTargets[MAXPLAYERS];
+        i totalTargetCount = 0;
+        
+        // Split playerTargetArgs by spaces and process each target individually
+        c targetsCopy[256];
+        strcopy(targetsCopy, sizeof(targetsCopy), playerTargetArgs);
+        
+        c singleTarget[64];
+        i targetPos = 0;
+        i targetStart = 0;
+        i targetLen = strlen(targetsCopy);
+        
+        while (targetPos <= targetLen) {
+            if (targetPos == targetLen || targetsCopy[targetPos] == ' ') {
+                if (targetPos > targetStart) {
+                    // Extract single target
+                    strcopy(singleTarget, sizeof(singleTarget), targetsCopy[targetStart]);
+                    singleTarget[targetPos - targetStart] = '\0';
+                    
+                    
+                    // Process this single target
+                    i targets[MAXPLAYERS];
+                    c target_name[MAX_TARGET_LENGTH];
+                    b tn_is_ml = false;
+                    i target_count = ProcessTargetString(singleTarget, client, targets, MAXPLAYERS, COMMAND_FILTER_CONNECTED, target_name, sizeof(target_name), tn_is_ml);
+                    
+                    
+                    // Add found targets to our combined list
+                    for (i n = 0; n < target_count && totalTargetCount < MAXPLAYERS; n++) {
+                        // Check if this target is already in our list (avoid duplicates)
+                        b alreadyAdded = false;
+                        for (i existing = 0; existing < totalTargetCount; existing++) {
+                            if (allTargets[existing] == targets[n]) {
+                                alreadyAdded = true;
+                                break;
+                            }
+                        }
+                        
+                        if (!alreadyAdded) {
+                            allTargets[totalTargetCount] = targets[n];
+                            totalTargetCount++;
+                        }
+                    }
+                }
+                targetStart = targetPos + 1;
+            }
+            targetPos++;
+        }
+
+
+        if (totalTargetCount <= 0) {
+            Reply(client, "No valid targets found.");
+            PH;
+        }
+
+        // Select random player from the combined target list
+        i random_index = GetRandomInt(0, totalTargetCount - 1);
+        i selected_player = allTargets[random_index];
+
+        // Get the selected player's name
+        c selected_name[MAX_NAME_LENGTH];
+        GetClientName(selected_player, selected_name, sizeof(selected_name));
+
+        // Print result to all chat
+        PrintToChatAll("%s was selected by the wheel!", selected_name);
+    } else {
+        Reply(client, "No valid targets or options provided.");
+        PH;
+    }
+
+    PH;
+}
+
 TFClassType ParseClass( c[] s ) {
     if ( StrEqual( s, "soldier" ) || StrEqual( s, "2" ) ) return TFClass_Soldier;
     if ( StrEqual( s, "demo" )    || StrEqual( s, "demoman" ) || StrEqual( s, "4" ) ) return TFClass_DemoMan;
-    if ( StrEqual( s, "medic" )   || StrEqual( s, "7" ) ) return TFClass_Medic;
+    if ( StrEqual( s, "med" )     || StrEqual( s, "medic" )   || StrEqual( s, "7" ) ) return TFClass_Medic;
     return TFClass_Unknown;
-}
-
-void GetClassString(TFClassType id, c[] buffer, i maxlength) {
-    switch (id) {
-        case TFClass_Soldier:  strcopy(buffer, maxlength, "soldier");
-        case TFClass_DemoMan:  strcopy(buffer, maxlength, "demoman");
-        case TFClass_Medic:    strcopy(buffer, maxlength, "medic");
-        default: strcopy(buffer, maxlength, "unknown");
-    }
 }
 
 NEW_CMD(CDebugRoundTime) {

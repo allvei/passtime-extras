@@ -29,15 +29,16 @@
 
 ### Client
 
-| command         | shortform | arguments | description                        |
-|-----------------|-----------|-----------|------------------------------------|
-| sm_save         | sm_sv     | -         | Save a spawn point                 |
-| sm_load         | sm_ld     | -         | Teleport to saved spawn            |
-| sm_immune       | sm_i      | -         | Toggle invulnerability             |
-| sm_ammo         | sm_a      | -         | Toggle infinite ammo               |
-| sm_fov          | -         | `70-120`  | Set your field of view             |
-| +sm_resupply    | -         | -         | Instant resupply when inside spawn |
-| +sm_pt_resupply | -         | -         | Instant resupply when inside spawn |
+| command         | shortform | arguments                                                                 | description                                                |
+|-----------------|-----------|---------------------------------------------------------------------------|------------------------------------------------------------|
+| sm_save         | sm_sv     | -                                                                         | Save a spawn point                                         |
+| sm_load         | sm_ld     | -                                                                         | Teleport to saved spawn                                    |
+| sm_immune       | sm_i      | -                                                                         | Toggle invulnerability                                     |
+| sm_ammo         | sm_a      | -                                                                         | Toggle infinite ammo                                       |
+| sm_diceroll     | sm_dice   | `client1` `client2` `...` OR `@all/red/blue` OR `"word1"` `"word2"` `...` | Select a random player from targets                        |
+| sm_fov          | -         | `70-120`                                                                  | Set your field of view                                     |
+| +sm_resupply    | -         | -                                                                         | Instant resupply when inside spawn                         |
+| +sm_pt_resupply | -         | -                                                                         | Instant resupply when inside spawn                         |
 
 ### Server console variables
 
