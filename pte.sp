@@ -39,8 +39,12 @@
 #define b     bool
 #define c     char
 #define Reply ReplyToCommand
-#define RCC   RegConsoleCmd
-#define RAC   RegAdminCmd
+
+#define CC    RegConsoleCmd
+#define CCS   RegConsoleCmdWithShort
+#define AC    RegAdminCmd
+#define ACS   RegAdminCmdWithShort
+
 #define HE    HookEvent
 #define NOTIFY FCVAR_NOTIFY
 #define GENERIC ADMFLAG_GENERIC
@@ -57,7 +61,7 @@ public Plugin myinfo = {
     name        = "passtime.tf extras",
     author      = "xCape",
     description = "Plugin for use in passtime.tf servers",
-    version     = "1.7.2",
+    version     = "1.7.3",
     url         = "https://github.com/allvei/passtime-extras/"
 }
 
@@ -118,44 +122,28 @@ i g_iSavedAmmoCount[MAXSLOTS][2];
 
 pub OnPluginStart() {
     // Admin commands
-    RAC( "sm_setteam",            CSetTeam,          GENERIC, "Set a client's team" );
-    RAC( "sm_st",                 CSetTeam,          GENERIC, "Set a client's team" );
-    RAC( "sm_setclass",           CSetClass,         GENERIC, "Set a client's class" );
-    RAC( "sm_sc",                 CSetClass,         GENERIC, "Set a client's class" );
-    RAC( "sm_ready",              CReady,            GENERIC, "Set a team's ready status" );
-    RAC( "sm_rdy",                CReady,            GENERIC, "Set a team's ready status" );
-    RAC( "sm_debug_roundtime",    CDebugRoundTime,   GENERIC, "Debug: print team_round_timer info" );
-    RAC( "sm_drt",                CDebugRoundTime,   GENERIC, "Debug: print team_round_timer info" );
-    RAC( "sm_enable_resupply",    CToggleResupply,   GENERIC, "Toggle resupply functionality" );
-    RAC( "sm_enable_respawn",     CToggleRespawn,    GENERIC, "Toggle instant respawn" );
-    RAC( "sm_enable_immunity",    CToggleImmunity,   GENERIC, "Toggle immunity and infinite ammo" );
-    RAC( "sm_enable_saveload",    CToggleSave,       GENERIC, "Toggle save/load spawn functionality" );
-    RAC( "sm_enable_demoresist",  CToggleDemoResist, GENERIC, "Toggle demo blast vulnerability" );
-    RAC( "sm_debug_classes",      CDebugClasses,     GENERIC, "Debug: print all player classes" );
-    RAC( "sm_dbc",                CDebugClasses,     GENERIC, "Debug: print all player classes" );
-    RAC( "sm_checkatt",           CCheckAtt,         GENERIC, "Debug: check entity attributes" );
-    RAC( "sm_ca",                 CCheckAtt,         GENERIC, "Debug: check entity attributes" );
+    ACS( "sm_ready",             "sm_rdy",  CReady,            GENERIC, "Set a team's ready status" );
+    ACS( "sm_debug_roundtime",   "sm_drt",  CDebugRoundTime,   GENERIC, "Debug: print team_round_timer info" );
+    ACS( "sm_enable_resupply",   "sm_res",  CToggleResupply,   GENERIC, "Toggle resupply functionality" );
+    ACS( "sm_enable_respawn",    "sm_resp", CToggleRespawn,    GENERIC, "Toggle instant respawn" );
+    ACS( "sm_enable_immunity",   "sm_imm",  CToggleImmunity,   GENERIC, "Toggle immunity and infinite ammo" );
+    ACS( "sm_enable_saveload",   "sm_sl",   CToggleSave,       GENERIC, "Toggle save/load spawn functionality" );
+    ACS( "sm_enable_demoresist", "sm_dr",   CToggleDemoResist, GENERIC, "Toggle demo blast vulnerability" );
+
+    // Runner commands
+    ACS( "sm_setteam",           "sm_st",   CSetTeam,          GENERIC, "Set a client's team" );
+    ACS( "sm_setclass",          "sm_sc",   CSetClass,         GENERIC, "Set a client's class" );
 
     // Console commands
-    RCC( "sm_save",         CSaveSpawn,    "Save a spawn point" );
-    RCC( "sm_sv",           CSaveSpawn,    "Save a spawn point" );
-    RCC( "sm_load",         CLoadSpawn,    "Teleport to saved spawn" );
-    RCC( "sm_ld",           CLoadSpawn,    "Teleport to saved spawn" );
-    RCC( "sm_immune",       CImmune,       "Toggle immunity" );
-    RCC( "sm_i",            CImmune,       "Toggle immunity" );
-    RCC( "sm_ammo",         CInfiniteAmmo, "Toggle infinite ammo" );
-    RCC( "sm_a",            CInfiniteAmmo, "Toggle infinite ammo" );
-    RCC( "sm_fov",          CSetFOV,       "Set your field of view." );
-    RCC( "+sm_resupply",    CResupplyDn,   "Resupply inside spawn" );
-    RCC( "-sm_resupply",    CResupplyUp,   "Resupply inside spawn" );
-    RCC( "+sm_pt_resupply", CResupplyDn,   "Resupply inside spawn" );
-    RCC( "-sm_pt_resupply", CResupplyUp,   "Resupply inside spawn" );
-    RCC( "sm_findent",      CFindEnt,      "Find entity by classname" );
-    RCC( "sm_fe",           CFindEnt,      "Find entity by classname" );
-    RCC( "sm_applyattrib",  CAppAtt,       "Apply attributes to entity" );
-    RCC( "sm_aa",           CAppAtt,       "Apply attributes to entity" );
-    RCC( "sm_removeattrib", CRemAtt,       "Remove attributes from entity" );
-    RCC( "sm_ra",           CRemAtt,       "Remove attributes from entity" );
+    CCS( "sm_save",              "sm_sv",   CSaveSpawn,        "Save a spawn point" );
+    CCS( "sm_load",              "sm_ld",   CLoadSpawn,        "Teleport to saved spawn" );
+    CCS( "sm_immune",            "sm_i",    CImmune,           "Toggle immunity" );
+    CCS( "sm_ammo",              "sm_a",    CInfiniteAmmo,     "Toggle infinite ammo" );
+    CCS( "sm_fov",               "sm_fov",  CSetFOV,           "Set your field of view." );
+    CC(  "+sm_resupply",                    CResupplyDn,       "Resupply inside spawn" );
+    CC(  "-sm_resupply",                    CResupplyUp,       "Resupply inside spawn" );
+    CC(  "+sm_pt_resupply",                 CResupplyDn,       "Resupply inside spawn" );
+    CC(  "-sm_pt_resupply",                 CResupplyUp,       "Resupply inside spawn" );
 
     g_hCookieFOV          = RegClientCookie( "sm_fov_cookie",          "Desired client field of view", CookieAccess_Private );
     g_hCookieInfiniteAmmo = RegClientCookie( "sm_infiniteammo_cookie", "Infinite ammo setting",        CookieAccess_Private );
@@ -277,64 +265,6 @@ b IsMatch() {
 // ====================================================================================================
 // COMMANDS
 // ====================================================================================================
-
-NEW_CMD(CFindEnt) {
-    // Check if classname argument is provided
-    if (args < 1) return EndCmd(client, "Usage: sm_findent <classname>");
-    
-    c classname[64];
-    GetCmdArg(1, classname, sizeof(classname));
-    
-    i ent = FindEntityByClassname(-1, classname);
-    if (ent != -1) {
-        PrintToChatAll("%s found! ID: %d", classname, ent);
-    } else {
-        PrintToChatAll("No entity found with classname: %s", classname);
-    }
-    PH;
-}
-
-NEW_CMD(CAppAtt) {
-    // Check if all required arguments are provided
-    if (args < 3) return EndCmd(client, "Usage: sm_applyattrib <entID> \"attribute name\" <value>");
-    
-    c entIdStr[16], attrName[64], valueStr[32];
-    GetCmdArg(1, entIdStr, sizeof(entIdStr));
-    GetCmdArg(2, attrName, sizeof(attrName));
-    GetCmdArg(3, valueStr, sizeof(valueStr));
-    
-    i entId = StringToInt(entIdStr);
-    f value = StringToFloat(valueStr);
-    
-    if (!IsValidEntity(entId)) return EndCmd(client, "Invalid entity ID: %d", entId);
-    
-    if (TF2Attrib_SetByName(entId, attrName, value)) {
-        Reply(client, "Applied attribute '%s' with value %.2f to entity %d", attrName, value, entId);
-    } else {
-        Reply(client, "Failed to apply attribute '%s' to entity %d", attrName, entId);
-    }
-    PH;
-    
-}
-
-NEW_CMD(CRemAtt) {
-    // Check if all required arguments are provided
-    if (args < 2) return EndCmd(client, "Usage: sm_removeattrib <entID> \"attribute name\"");
-    
-    c entIdStr[16], attrName[64];
-    GetCmdArg(1, entIdStr, sizeof(entIdStr));
-    GetCmdArg(2, attrName, sizeof(attrName));
-    
-    i entId = StringToInt(entIdStr);
-    
-    if (!IsValidEntity(entId)) return EndCmd(client, "Invalid entity ID: %d", entId);
-    if (TF2Attrib_RemoveByName(entId, attrName)) {
-        Reply(client, "Removed attribute '%s' from entity %d", attrName, entId);
-    } else {
-        Reply(client, "Failed to remove attribute '%s' from entity %d", attrName, entId);
-    }
-    PH;
-}
 
 // Command to set a team's ready status
 NEW_CMD(CReady) {
@@ -751,63 +681,6 @@ NEW_CMD(CToggleDemoResist) {
     return EndCmd(client, "Demo blast vulnerability %s", g_bDemoResistEnabled ? "ENABLED" : "DISABLED");
 }
 
-// Debug command to print player classes and attributes
-NEW_CMD(CDebugClasses) {
-    if (args < 1) return EndCmd(client, "Usage: sm_debug_classes <#userid|name>");
-    
-    // Parse target argument
-    c target[33];
-    GetCmdArg(1, target, sizeof(target));
-    
-    i target_list[MAXPLAYERS];
-    c target_name[MAX_TARGET_LENGTH];
-    b tn_is_ml = false;
-    i target_count = ProcessTargetString(target, client, target_list, MAXPLAYERS, COMMAND_FILTER_CONNECTED, target_name, sizeof(target_name), tn_is_ml);
-    
-    if (target_count == COMMAND_TARGET_NONE) PH;
-    
-    Reply(client, "=== Player Class & Attribute Debug ===");
-    
-    for (i n = 0; n < target_count; n++) {
-        i targetClient = target_list[n];
-        if (IsClientInGame(targetClient)) {
-            c className[16];
-            c name[64];
-            TFClassType classID = TF2_GetPlayerClass(targetClient);
-            GetClassString(classID, className, sizeof(className));
-            GetClientName(targetClient, name, sizeof(name));
-            
-            f blastReduction = TF2Attrib_GetValue(TF2Attrib_GetByName(targetClient, "dmg taken from blast reduced"));
-            
-            Reply(client, "%s: class ID %d (%s)", name, classID, className);
-            Reply(client, "  - Blast damage reduction: %.2f", blastReduction);
-        }
-    }
-    
-    PH;
-}
-
-// Debug command to check entity attributes
-NEW_CMD(CCheckAtt) {
-    if (args < 2) return EndCmd(client, "Usage: sm_checkatt <ent_id> <prop_name>");
-    
-    c entIdStr[16];
-    GetCmdArg(1, entIdStr, sizeof(entIdStr));
-    i entId = StringToInt(entIdStr);
-    
-    c propName[64];
-    GetCmdArg(2, propName, sizeof(propName));
-    
-    if (!IsValidEntity(entId)) return EndCmd(client, "Invalid entity ID: %d", entId);
-
-    // Check if the entity has attributes
-    Reply(client, "Entity %d: %s '%s'",
-          entId,
-          HasEntProp(entId, Prop_Send, propName) ? "Has" : "Doesn't have",
-          propName); 
-    PH;
-}
-
 // ====================================================================================================
 // EVENTS
 // ====================================================================================================
@@ -1133,6 +1006,26 @@ v SetAmmo(i client, i weapon, i ammo)
 
 i TF2_GetPlayerMaxHealth(int client) {
 	return GetEntProp(GetPlayerResourceEntity(), Prop_Send, "m_iMaxHealth", _, client);
+}
+
+v RegAdminCmdWithShort(const char[] cmd,
+                       const char[] shortcmd,
+                       ConCmd callback,
+                       int adminflags,
+                       const char[] description="",
+                       const char[] group="",
+                       int flags=0) {
+    RegAdminCmd(cmd,      callback, adminflags, description, group, flags);
+    RegAdminCmd(shortcmd, callback, adminflags, description, group, flags);
+}
+
+v RegConsoleCmdWithShort(const char[] cmd,
+                         const char[] shortcmd,
+                         ConCmd callback,
+                         const char[] description="",
+                         int flags=0) {
+    RegConsoleCmd(cmd,      callback, description, flags);
+    RegConsoleCmd(shortcmd, callback, description, flags);
 }
 
 // ====================================================================================================
