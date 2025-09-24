@@ -115,6 +115,22 @@ b g_bImmunityAmmoEnabled   = true;
 b g_bSaveEnabled           = true;
 b g_bDemoResistEnabled     = false;
 
+// Performance optimization: cached entity indices
+i g_iCachedTimerEntity = -1;
+ArrayList g_hCachedSpawnRooms = null;
+ArrayList g_hCachedSpawnPoints[2] = {null, null}; // RED and BLU spawn points
+
+// Performance optimization: demo resistance state tracking
+f g_fCurrentDemoResistValue[MAXPLAYERS]; // Track current applied resistance value
+b g_bDemoResistApplied[MAXPLAYERS];      // Track if resistance is currently applied
+
+// Performance optimization: resupply timers
+Handle g_hResupplyTimer[MAXPLAYERS] = {null, ...};
+
+// Performance optimization: static ammo arrays (replace ArrayList allocations)
+i g_iStaticOriginalAmmo[MAXPLAYERS][34]; // 2 clip values + 32 ammo types
+b g_bStaticAmmoValid[MAXPLAYERS];        // Track if ammo data is valid
+
 i g_iSavedClip1[    MAXSLOTS];
 i g_iSavedClip2[    MAXSLOTS];
 i g_iSavedAmmoType[ MAXSLOTS][2];
@@ -129,6 +145,7 @@ pub OnPluginStart() {
     ACS( "sm_enable_immunity",   "sm_imm",  CToggleImmunity,   GENERIC, "Toggle immunity and infinite ammo" );
     ACS( "sm_enable_saveload",   "sm_sl",   CToggleSave,       GENERIC, "Toggle save/load spawn functionality" );
     ACS( "sm_enable_demoresist", "sm_dr",   CToggleDemoResist, GENERIC, "Toggle demo blast vulnerability" );
+    ACS( "sm_list_blast_attrib", "sm_lba",  CListBlastAttrib,  GENERIC, "Debug: list entities with blast attributes" );
 
     // Runner commands
     ACS( "sm_setteam",           "sm_st",   CSetTeam,          GENERIC, "Set a client's team" );
@@ -188,6 +205,17 @@ pub OnPluginStart() {
         g_bBackupImmunityTracked[n]     = false;
         g_bBackupInfiniteAmmo[n]        = false;
         g_bBackupImmunity[n]            = false;
+        
+        // Initialize performance optimization arrays
+        g_fCurrentDemoResistValue[n] = 0.0;
+        g_bDemoResistApplied[n]      = false;
+        g_hResupplyTimer[n]          = null;
+        g_bStaticAmmoValid[n]        = false;
+        
+        // Initialize static ammo array
+        for (i j = 0; j < 34; j++) {
+            g_iStaticOriginalAmmo[n][j] = 0;
+        }
     }
 
     // Hook damage for currently connected clients and reset nodamage flags
@@ -200,41 +228,46 @@ pub OnPluginStart() {
             SDKHook( n, SDKHook_OnTakeDamagePost, Hook_OnTakeDamagePost );
         }
     }
+    
+    // Initialize entity cache arrays
+    g_hCachedSpawnRooms = new ArrayList();
+    g_hCachedSpawnPoints[RED] = new ArrayList();
+    g_hCachedSpawnPoints[BLU] = new ArrayList();
+    
+    // Build initial entity cache
+    BuildEntityCache();
 }
 
+// PERFORMANCE OPTIMIZED: OnGameFrame() now only handles critical per-frame logic
+// Most functionality moved to event-driven hooks
 pub v OnGameFrame() {
-    FOR_EACH_CLIENT( client ) {
-        if ( !IsValidClientAlive( client ) ) continue;
-        
-        // Apply demo blast resistance if feature is enabled
-        if (!g_bDemoResistEnabled && TF2_GetPlayerClass(client) == TFClass_DemoMan) {
-            TF2Attrib_SetByName(client, "dmg taken from blast reduced", 1.25);
-        } else {
-            TF2Attrib_SetByName(client, "dmg taken from blast reduced", 1.0);
-        }
-        
-        // Handle infinite ammo (excluding medics)
-        if ( !IsMatch() && g_bImmunityAmmoEnabled && g_bInfiniteAmmo[ client ] && TF2_GetPlayerClass(client) != TFClass_Medic ) {
-            // Get the active weapon
-            i weapon = GetEntPropEnt( client, Prop_Send, "m_hActiveWeapon" );
-            if ( weapon != -1 && IsValidEntity( weapon ) ) {
-                SetEntProp( weapon, Prop_Send, "m_iClip1", 19 );
-                SetAmmo( client, weapon, 84 );
-            }
-        }
-        
-        // Check for buffered resupply (only if globally enabled)
-        if (g_bResupplyEnabled && g_bResupplyDn[client] && !g_bResupplyUp[client] && IsClientInSpawnroom(client)) {
-            Resupply(client);
-        }
+    // Only validate entity cache periodically (every 30 frames = ~0.5 seconds)
+    static i frameCounter = 0;
+    if (++frameCounter >= 30) {
+        frameCounter = 0;
+        ValidateEntityCache();
     }
+    
+    // All other logic moved to event-driven hooks:
+    // - Demo resistance: Applied on spawn/class change
+    // - Infinite ammo: Handled by weapon hooks
+    // - Resupply: Uses RequestFrame timers
 }
 
 // Hook per-client when they enter the server so our damage filter is active
 pub v OnClientPutInServer( i client ) {
     SDKHook( client, SDKHook_OnTakeDamage,     Hook_OnTakeDamage );
     SDKHook( client, SDKHook_OnTakeDamagePost, Hook_OnTakeDamagePost );
-
+    
+    // PERFORMANCE OPTIMIZATION: Hook weapon events for infinite ammo
+    SDKHook( client, SDKHook_WeaponSwitchPost, Hook_WeaponSwitchPost );
+    SDKHook( client, SDKHook_PostThinkPost,    Hook_PostThinkPost );
+    
+    // Initialize performance tracking for this client
+    g_fCurrentDemoResistValue[client] = 0.0;
+    g_bDemoResistApplied[client]      = false;
+    g_bStaticAmmoValid[client]        = false;
+    
     if ( g_bBackupFOVDB ) {
         // Reset tracking for this player slot if backup system is active
         g_bPlayerTracked[ client ] = false;
@@ -242,21 +275,18 @@ pub v OnClientPutInServer( i client ) {
     }
 }
 
+// PERFORMANCE OPTIMIZED: Use cached timer entity
 b IsMatch() {
     // Match is not active if game is awaiting ready restart, timer is paused, or timer is disabled
     b awaitingReadyRestart = as<b>(GameRules_GetProp("m_bAwaitingReadyRestart"));
-    i timerEnt      = -1;
     b timerPaused   = false;
     b timerDisabled = false;
     b IsPostRound   = GameRules_GetRoundState() == RoundState_TeamWin;
 
-    // Find any active team_round_timer entity
-    while ((timerEnt = FindEntityByClassname(timerEnt, "team_round_timer")) != -1) {
-        timerPaused   = as<b>(GetEntProp(timerEnt, Prop_Send, "m_bTimerPaused"));
-        timerDisabled = as<b>(GetEntProp(timerEnt, Prop_Send, "m_bIsDisabled"));
-        
-        // If we found a timer, break since we only need to check one
-        if (timerEnt != -1) break;
+    // Use cached timer entity instead of searching
+    if (g_iCachedTimerEntity != -1 && IsValidEntity(g_iCachedTimerEntity)) {
+        timerPaused   = as<b>(GetEntProp(g_iCachedTimerEntity, Prop_Send, "m_bTimerPaused"));
+        timerDisabled = as<b>(GetEntProp(g_iCachedTimerEntity, Prop_Send, "m_bIsDisabled"));
     }
 
     // Match is active only if we're not awaiting ready restart and timer is running (not paused and not disabled)
@@ -397,10 +427,10 @@ NEW_CMD(CSaveSpawn) {
 
     // Save current ammo and clips for carried weapons
     for ( i s = 0; s < MAXSLOTS; s++ ) {
-        g_iSavedClip1[s] = -1;
-        g_iSavedClip2[s] = -1;
-        g_iSavedAmmoType[s][0] = -1;
-        g_iSavedAmmoType[s][1] = -1;
+        g_iSavedClip1[s]        = -1;
+        g_iSavedClip2[s]        = -1;
+        g_iSavedAmmoType[s][0]  = -1;
+        g_iSavedAmmoType[s][1]  = -1;
         g_iSavedAmmoCount[s][0] = 0;
         g_iSavedAmmoCount[s][1] = 0;
         
@@ -525,175 +555,69 @@ NEW_CMD(CSetClass) {
     PH;
 }
 
-// Spin the wheel - select a random player from targets or custom strings
+// PERFORMANCE OPTIMIZED: Select a random player from targets or custom strings
 NEW_CMD(CDice) {
-    // Check if we have at least one argument (target specification)
-    if (args < 1) return EndCmd(client, "Usage: sm_spin <\"customstring\" | #userid | playername | @team>");
-
-    // Debug: Print all arguments
-    c debugArgs[256];
-    GetCmdArgString(debugArgs, sizeof(debugArgs));
+    if (args < 1) return EndCmd(client, "Usage: sm_dice <\"customstring\" | #userid | playername | @team>");
 
     c customStrings[10][64]; // Support up to 10 custom strings
-    c playerTargetArgs[256]; // Build target string for player selection
     i customCount = 0;
-    b hasPlayerTargets = false;
-
-    // Get the full command string and parse manually
-    c fullCmd[256];
-    GetCmdArgString(fullCmd, sizeof(fullCmd));
-
-    // Remove "sm_spin " prefix to get just the arguments
-    ReplaceString(fullCmd, sizeof(fullCmd), "sm_spin ", "");
-
-
-    // Parse arguments manually, respecting quotes
-    i pos = 0;
-    i len = strlen(fullCmd);
-
-    while (pos < len) {
-        // Skip leading spaces
-        while (pos < len && (fullCmd[pos] == ' ' || fullCmd[pos] == '\t')) {
-            pos++;
-        }
-        
-        if (pos >= len) break;
-
+    i allTargets[MAXPLAYERS];
+    i totalTargetCount = 0;
+    
+    // Process each argument using SourceMod helpers
+    for (i argIndex = 1; argIndex <= args; argIndex++) {
         c arg[64];
-        i argLen = 0;
-
-        if (fullCmd[pos] == '"') {
-            // Quoted string - find the closing quote
-            pos++; // Skip opening quote
-            i startPos = pos;
-            
-            while (pos < len && fullCmd[pos] != '"') {
-                pos++;
-            }
-            
-            if (pos < len) {
-                // Found closing quote
-                argLen = pos - startPos;
-                strcopy(arg, sizeof(arg), fullCmd[startPos]);
-                arg[argLen] = '\0';
-                pos++; // Skip closing quote
-                
-                // This is a custom string
-                strcopy(customStrings[customCount], sizeof(customStrings[]), arg);
-                customCount++;
-            } else {
-                // No closing quote found - treat as regular argument
-                strcopy(arg, sizeof(arg), fullCmd[startPos-1]); // Include the opening quote
-                arg[len - startPos + 1] = '\0';
-                
-                if (strlen(playerTargetArgs) > 0) StrCat(playerTargetArgs, sizeof(playerTargetArgs), " ");
-                StrCat(playerTargetArgs, sizeof(playerTargetArgs), arg);
-                hasPlayerTargets = true;
-                break;
-            }
+        GetCmdArg(argIndex, arg, sizeof(arg));
+        
+        // Check if it's a quoted custom string
+        if (arg[0] == '"' && strlen(arg) > 2 && arg[strlen(arg)-1] == '"') {
+            // Remove quotes and store as custom string
+            strcopy(customStrings[customCount], sizeof(customStrings[]), arg[1]);
+            customStrings[customCount][strlen(customStrings[customCount])-1] = '\0';
+            customCount++;
         } else {
-            // Regular argument - read until space
-            i startPos = pos;
+            // Try to process as player target
+            i targets[MAXPLAYERS];
+            c target_name[MAX_TARGET_LENGTH];
+            b tn_is_ml = false;
+            i target_count = ProcessTargetString(arg, client, targets, MAXPLAYERS, COMMAND_FILTER_CONNECTED, target_name, sizeof(target_name), tn_is_ml);
             
-            while (pos < len && fullCmd[pos] != ' ' && fullCmd[pos] != '\t') {
-                pos++;
-            }
-            
-            argLen = pos - startPos;
-            strcopy(arg, sizeof(arg), fullCmd[startPos]);
-            arg[argLen] = '\0';
-            
-            // This is a player target
-            if (strlen(playerTargetArgs) > 0) StrCat(playerTargetArgs, sizeof(playerTargetArgs), " ");
-            StrCat(playerTargetArgs, sizeof(playerTargetArgs), arg);
-            hasPlayerTargets = true;
-        }
-    }
-
-    if (hasPlayerTargets) {
-    }
-
-    if (customCount > 0 && !hasPlayerTargets) {
-        // All arguments are custom strings - select random custom string
-        i random_index = GetRandomInt(0, customCount - 1);
-        c selected_option[64];
-        strcopy(selected_option, sizeof(selected_option), customStrings[random_index]);
-
-        // Print result to all chat
-        PrintToChatAll("Spun the wheel and chose %s", selected_option);
-    } else if (hasPlayerTargets) {
-        // Handle player targets - need to process each target individually and combine results
-        
-        i allTargets[MAXPLAYERS];
-        i totalTargetCount = 0;
-        
-        // Split playerTargetArgs by spaces and process each target individually
-        c targetsCopy[256];
-        strcopy(targetsCopy, sizeof(targetsCopy), playerTargetArgs);
-        
-        c singleTarget[64];
-        i targetPos = 0;
-        i targetStart = 0;
-        i targetLen = strlen(targetsCopy);
-        
-        while (targetPos <= targetLen) {
-            if (targetPos == targetLen || targetsCopy[targetPos] == ' ') {
-                if (targetPos > targetStart) {
-                    // Extract single target
-                    strcopy(singleTarget, sizeof(singleTarget), targetsCopy[targetStart]);
-                    singleTarget[targetPos - targetStart] = '\0';
-                    
-                    
-                    // Process this single target
-                    i targets[MAXPLAYERS];
-                    c target_name[MAX_TARGET_LENGTH];
-                    b tn_is_ml = false;
-                    i target_count = ProcessTargetString(singleTarget, client, targets, MAXPLAYERS, COMMAND_FILTER_CONNECTED, target_name, sizeof(target_name), tn_is_ml);
-                    
-                    
-                    // Add found targets to our combined list
-                    for (i n = 0; n < target_count && totalTargetCount < MAXPLAYERS; n++) {
-                        // Check if this target is already in our list (avoid duplicates)
-                        b alreadyAdded = false;
-                        for (i existing = 0; existing < totalTargetCount; existing++) {
-                            if (allTargets[existing] == targets[n]) {
-                                alreadyAdded = true;
-                                break;
-                            }
-                        }
-                        
-                        if (!alreadyAdded) {
-                            allTargets[totalTargetCount] = targets[n];
-                            totalTargetCount++;
-                        }
+            // Add found targets to our combined list (avoid duplicates)
+            for (i n = 0; n < target_count && totalTargetCount < MAXPLAYERS; n++) {
+                b alreadyAdded = false;
+                for (i existing = 0; existing < totalTargetCount; existing++) {
+                    if (allTargets[existing] == targets[n]) {
+                        alreadyAdded = true;
+                        break;
                     }
                 }
-                targetStart = targetPos + 1;
+                
+                if (!alreadyAdded) {
+                    allTargets[totalTargetCount] = targets[n];
+                    totalTargetCount++;
+                }
             }
-            targetPos++;
         }
-
-
-        if (totalTargetCount <= 0) {
-            Reply(client, "No valid targets found.");
-            PH;
-        }
-
-        // Select random player from the combined target list
+    }
+    
+    // Determine what to select from
+    if (customCount > 0 && totalTargetCount == 0) {
+        // Only custom strings - select random custom string
+        i random_index = GetRandomInt(0, customCount - 1);
+        PrintToChatAll("Spun the wheel and chose %s", customStrings[random_index]);
+    } else if (totalTargetCount > 0) {
+        // Players found - select random player
         i random_index = GetRandomInt(0, totalTargetCount - 1);
         i selected_player = allTargets[random_index];
-
-        // Get the selected player's name
+        
         c selected_name[MAX_NAME_LENGTH];
         GetClientName(selected_player, selected_name, sizeof(selected_name));
-
-        // Print result to all chat
         PrintToChatAll("%s was selected by the wheel!", selected_name);
     } else {
         Reply(client, "No valid targets or options provided.");
         PH;
     }
-
+    
     PH;
 }
 
@@ -821,7 +745,7 @@ NEW_CMD(CToggleSave) {
     return EndCmd(client, "Save/Load spawn functionality %s", g_bSaveEnabled ? "ENABLED" : "DISABLED");
 }
 
-// Backup toggle for demo blast vulnerability
+// PERFORMANCE OPTIMIZED: Backup toggle for demo blast vulnerability
 NEW_CMD(CToggleDemoResist) {
     if (args != 1) return EndCmd(client, "Usage: sm_enable_demoresist <0|1>");
 
@@ -833,16 +757,35 @@ NEW_CMD(CToggleDemoResist) {
 
     g_bDemoResistEnabled = (value != 0);
 
-    // If disabling, remove blast vulnerability attributes from all players
-    if (g_bDemoResistEnabled) {
-        FOR_EACH_CLIENT( n ) {
-            if (IsClientInGame(n)) {
-                TF2Attrib_RemoveByName(n, "dmg taken from blast reduced");
-            }
+    // Apply resistance changes to all connected players
+    FOR_EACH_CLIENT( n ) {
+        if (IsClientInGame(n)) {
+            ApplyDemoResistance(n);
         }
     }
 
     return EndCmd(client, "Demo blast vulnerability %s", g_bDemoResistEnabled ? "ENABLED" : "DISABLED");
+}
+
+// Debug command to list entities with blast attributes
+NEW_CMD(CListBlastAttrib) {
+    i count = 0;
+    FOR_EACH_CLIENT( n ) {
+        if (IsClientInGame(n) && g_bDemoResistApplied[n]) {
+            c name[MAX_NAME_LENGTH];
+            GetClientName(n, name, sizeof(name));
+            Reply(client, "Player %s (ID: %d) has blast resistance value: %.2f", name, n, g_fCurrentDemoResistValue[n]);
+            count++;
+        }
+    }
+    
+    if (count == 0) {
+        Reply(client, "No players currently have blast resistance attributes applied.");
+    } else {
+        Reply(client, "Total players with blast resistance: %d", count);
+    }
+    
+    PH;
 }
 
 // ====================================================================================================
@@ -883,6 +826,9 @@ NEW_EV(EPSpawn) {
     i client = GetClientOfUserId( event.GetInt( "userid" ) );
     if ( !IsValidClient( client ) ) return;
 
+    // PERFORMANCE OPTIMIZATION: Apply demo resistance on spawn instead of per-frame
+    ApplyDemoResistance(client);
+
     // Try to restore settings from cookies first
     if ( AreClientCookiesCached( client ) ) {
         if ( GetFOVCookie( client ) ) {
@@ -912,7 +858,7 @@ NEW_EV(EPSpawn) {
     if ( g_bBackupInfiniteAmmoTracked[ client ] ) {
         g_bInfiniteAmmo[ client ] = g_bBackupInfiniteAmmo[ client ];
         if ( g_bInfiniteAmmo[ client ] ) {
-            SetInitAmmo( client );
+            SetInitAmmoStatic( client );
         }
     }
 
@@ -1014,7 +960,7 @@ pub v RespawnFrame( any client ) {
     if (!IsPlayerAlive(client)) TF2_RespawnPlayer(client);
 }
 
-// Command for when resupply key is pressed
+// PERFORMANCE OPTIMIZED: Command for when resupply key is pressed
 NEW_CMD(CResupplyDn) {
     // Check if resupply is globally enabled
     if (!g_bResupplyEnabled) return EndCmd(client, "Resupply is disabled.");
@@ -1026,13 +972,13 @@ NEW_CMD(CResupplyDn) {
     g_bResupplyDn[client] = true;
     g_bResupplyUp[client] = false;
 
-    // Try to resupply immediately if in spawn room
-    Resupply(client);
+    // Start resupply timer instead of per-frame polling
+    StartResupplyTimer(client);
 
     PH;
 }
 
-// Command for when resupply key is released
+// PERFORMANCE OPTIMIZED: Command for when resupply key is released
 NEW_CMD(CResupplyUp) {
     // Check if client is valid
     if (!IsClientInGame(client)) PH;
@@ -1040,8 +986,9 @@ NEW_CMD(CResupplyUp) {
     // Check if resupply is globally enabled
     if (!g_bResupplyEnabled) PH;
 
-    // Mark the key as up
+    // Mark the key as up and stop timer
     g_bResupplyDn[client] = false;
+    StopResupplyTimer(client);
     PH;
 }
 
@@ -1093,12 +1040,14 @@ b IsColliding(i client, i entity) {
             playerHullMaxs[2] >= entityMins[2] && playerHullMins[2] <= entityMaxs[2]);
 }
 
-// Check if a player is touching any func_respawnroom entities of their own team
+// PERFORMANCE OPTIMIZED: Check if a player is touching any func_respawnroom entities of their own team
 b IsClientInSpawnroom(i client) {
-    // Find all func_respawnroom entities
-    i spawnroom = -1;
-    while ((spawnroom = FindEntityByClassname(spawnroom, "func_respawnroom")) != -1) {
-        if (IsValidEntity(spawnroom) && GetEntProp(spawnroom, Prop_Send, "m_iTeamNum") == GetClientTeam(client) && IsColliding(client, spawnroom)) {
+    // Use cached spawn room entities instead of searching
+    i clientTeam = GetClientTeam(client);
+    
+    for (i idx = 0; idx < g_hCachedSpawnRooms.Length; idx++) {
+        i spawnroom = g_hCachedSpawnRooms.Get(idx);
+        if (IsValidEntity(spawnroom) && GetEntProp(spawnroom, Prop_Send, "m_iTeamNum") == clientTeam && IsColliding(client, spawnroom)) {
             if (IsTooFarFromSpawnpoint(client)) return false;
             return true;
         }
@@ -1106,37 +1055,40 @@ b IsClientInSpawnroom(i client) {
     return false;
 }
 
-// Get distance to nearest spawn point of player's team
+// PERFORMANCE OPTIMIZED: Get distance to nearest spawn point of player's team
 b IsTooFarFromSpawnpoint(i client) {
     f playerPos[3];
     GetClientAbsOrigin(client, playerPos);
 
     f nearestDistance = 100000.0;
+    i clientTeam = GetClientTeam(client);
+    i teamIndex = (clientTeam == 2) ? RED : BLU; // Convert TF team to array index
+    
+    // Use cached spawn points instead of searching
+    if (g_hCachedSpawnPoints[teamIndex] != null) {
+        for (i idx = 0; idx < g_hCachedSpawnPoints[teamIndex].Length; idx++) {
+            i spawn = g_hCachedSpawnPoints[teamIndex].Get(idx);
+            if (!IsValidEntity(spawn)) continue;
 
-    // Find all info_player_teamspawn entities for the player's team
-    i spawn = -1;
-    while ((spawn = FindEntityByClassname(spawn, "info_player_teamspawn")) != -1) {
-        if (!IsValidEntity(spawn)) continue;
+            f spawnPos[3];
+            GetEntPropVector(spawn, Prop_Send, "m_vecOrigin", spawnPos);
 
-        i spawnTeam = GetEntProp(spawn, Prop_Send, "m_iTeamNum");
-        if (spawnTeam != GetClientTeam(client)) continue;
-
-        f spawnPos[3];
-        GetEntPropVector(spawn, Prop_Send, "m_vecOrigin", spawnPos);
-
-        f distance = GetVectorDistance(playerPos, spawnPos);
-        if (distance < nearestDistance) nearestDistance = distance;
+            f distance = GetVectorDistance(playerPos, spawnPos);
+            if (distance < nearestDistance) nearestDistance = distance;
+        }
     }
+    
     if (nearestDistance < RESUPDIST) return false;
     else {
         c name[MAX_NAME_LENGTH];
+        GetClientName(client, name, sizeof(name));
         PrintToChatAll("Resupply blocked out of spawn! %s was %.1f units from spawn (max: %.1f)", 
-                       GetClientName(client, name, sizeof(name)), nearestDistance, RESUPDIST);
+                       name, nearestDistance, RESUPDIST);
         return true;
     }
 }
 
-// Called when a client disconnects
+// PERFORMANCE OPTIMIZED: Called when a client disconnects
 pub OnClientDisconnect(i client) {
     g_bResupplyDn[   client] = false;
     g_bResupplyUp[   client] = false;
@@ -1155,6 +1107,17 @@ pub OnClientDisconnect(i client) {
     if (g_hOriginalAmmo[client] != null) {
         delete g_hOriginalAmmo[client];
         g_hOriginalAmmo[client] = null;
+    }
+    
+    // Clean up performance optimization tracking
+    g_fCurrentDemoResistValue[client] = 0.0;
+    g_bDemoResistApplied[client]      = false;
+    g_bStaticAmmoValid[client]        = false;
+    StopResupplyTimer(client);
+    
+    // Clear static ammo array
+    for (i j = 0; j < 34; j++) {
+        g_iStaticOriginalAmmo[client][j] = 0;
     }
 }
 
@@ -1233,10 +1196,11 @@ b GetAmmoCookie(i client) {
     c cookie[2];
     GetClientCookie(client, g_hCookieInfiniteAmmo, cookie, sizeof(cookie));
 
-    if (strlen(cookie) == 0) return false; // No saved setting
+    if (strlen(cookie) == 0) return false;
 
     b enabled = (StringToInt(cookie) != 0);
     g_bInfiniteAmmo[client] = enabled;
+    
 
     // If backup system is active, update it with cookie value
     if (g_bBackupFOVDB) {
@@ -1275,7 +1239,7 @@ b GetImmunityCookie(i client) {
     c cookie[2];
     GetClientCookie(client, g_hCookieImmunity, cookie, sizeof(cookie));
 
-    if (strlen(cookie) == 0) return false; // No saved setting
+    if (strlen(cookie) == 0) { return false; }
 
     b enabled = (StringToInt(cookie) != 0);
     g_bImmunity[client] = enabled;
@@ -1289,6 +1253,44 @@ b GetImmunityCookie(i client) {
     return true;
 }
 
+// PERFORMANCE OPTIMIZED: Static array version of SetInitAmmo (no ArrayList allocation)
+pub v SetInitAmmoStatic( i client ) {
+    // Get the active weapon
+    i weapon = GetEntPropEnt( client, Prop_Send, "m_hActiveWeapon" );
+    if ( weapon == -1 || !IsValidEntity( weapon ) ) return;
+
+    // Store clip values in static array
+    g_iStaticOriginalAmmo[client][0] = GetEntProp( weapon, Prop_Send, "m_iClip1" );
+    g_iStaticOriginalAmmo[client][1] = GetEntProp( weapon, Prop_Send, "m_iClip2" );
+
+    // Store reserve ammo values for all ammo types
+    for ( i ammoType = 0; ammoType < 32; ammoType++ ) {
+        g_iStaticOriginalAmmo[client][ammoType + 2] = GetEntProp( client, Prop_Send, "m_iAmmo", _, ammoType );
+    }
+    
+    g_bStaticAmmoValid[client] = true;
+}
+
+// PERFORMANCE OPTIMIZED: Static array version of GetInitAmmo
+pub v GetInitAmmoStatic( i client ) {
+    // Check if player has valid stored ammo data
+    if (!g_bStaticAmmoValid[client]) return;
+
+    // Get the active weapon
+    i weapon = GetEntPropEnt( client, Prop_Send, "m_hActiveWeapon" );
+    if ( weapon == -1 || !IsValidEntity( weapon ) ) return;
+
+    // Restore clip values
+    SetEntProp( weapon, Prop_Send, "m_iClip1", g_iStaticOriginalAmmo[client][0] );
+    SetEntProp( weapon, Prop_Send, "m_iClip2", g_iStaticOriginalAmmo[client][1] );
+
+    // Restore reserve ammo values
+    for ( i ammoType = 0; ammoType < 32; ammoType++ ) {
+        SetEntProp( client, Prop_Send, "m_iAmmo", g_iStaticOriginalAmmo[client][ammoType + 2], _, ammoType );
+    }
+}
+
+// Legacy ArrayList version (kept for compatibility)
 pub v SetInitAmmo( i client ) {
     // Clean up existing ArrayList if it exists
     if (g_hOriginalAmmo[client] != null) {
@@ -1353,4 +1355,209 @@ pub v Hook_OnTakeDamagePost( i victim, i attacker, i inflictor, f damage, i dama
         g_bPendingHP[ victim ] = false;
         if ( IsValidClientAlive(victim) ) SetEntityHealth( victim, TF2_GetPlayerMaxHealth(victim) );
     }
+}
+
+// ====================================================================================================
+// PERFORMANCE OPTIMIZATION HELPER FUNCTIONS
+// ====================================================================================================
+
+// Build entity cache for performance optimization
+v BuildEntityCache() {
+    // Clear existing cache
+    g_hCachedSpawnRooms.Clear();
+    g_hCachedSpawnPoints[RED].Clear();
+    g_hCachedSpawnPoints[BLU].Clear();
+    g_iCachedTimerEntity = -1;
+    
+    // Cache team_round_timer entities
+    i entity = -1;
+    while ((entity = FindEntityByClassname(entity, "team_round_timer")) != -1) {
+        if (IsValidEntity(entity)) {
+            g_iCachedTimerEntity = entity;
+            break; // Only need one timer
+        }
+    }
+    
+    // Cache func_respawnroom entities
+    entity = -1;
+    while ((entity = FindEntityByClassname(entity, "func_respawnroom")) != -1) {
+        if (IsValidEntity(entity)) {
+            g_hCachedSpawnRooms.Push(entity);
+        }
+    }
+    
+    // Cache info_player_teamspawn entities
+    entity = -1;
+    while ((entity = FindEntityByClassname(entity, "info_player_teamspawn")) != -1) {
+        if (IsValidEntity(entity)) {
+            i team = GetEntProp(entity, Prop_Send, "m_iTeamNum");
+            if (team == 2) { // RED
+                g_hCachedSpawnPoints[RED].Push(entity);
+            } else if (team == 3) { // BLU
+                g_hCachedSpawnPoints[BLU].Push(entity);
+            }
+        }
+    }
+    
+    PrintToServer("[PTE] Entity cache built: %d spawn rooms, %d RED spawns, %d BLU spawns, timer: %d", 
+                  g_hCachedSpawnRooms.Length, g_hCachedSpawnPoints[RED].Length, g_hCachedSpawnPoints[BLU].Length, g_iCachedTimerEntity);
+}
+
+// Validate entity cache (called periodically)
+v ValidateEntityCache() {
+    b needsRebuild = false;
+    
+    // Check if timer entity is still valid
+    if (g_iCachedTimerEntity != -1 && !IsValidEntity(g_iCachedTimerEntity)) {
+        needsRebuild = true;
+    }
+    
+    // Check spawn rooms
+    for (i idx = 0; idx < g_hCachedSpawnRooms.Length; idx++) {
+        if (!IsValidEntity(g_hCachedSpawnRooms.Get(idx))) {
+            needsRebuild = true;
+            break;
+        }
+    }
+    
+    // Check spawn points
+    if (!needsRebuild) {
+        for (i team = 0; team < 2; team++) {
+            for (i idx = 0; idx < g_hCachedSpawnPoints[team].Length; idx++) {
+                if (!IsValidEntity(g_hCachedSpawnPoints[team].Get(idx))) {
+                    needsRebuild = true;
+                    break;
+                }
+            }
+            if (needsRebuild) break;
+        }
+    }
+    
+    if (needsRebuild) {
+        PrintToServer("[PTE] Entity cache invalidated, rebuilding...");
+        BuildEntityCache();
+    }
+}
+
+// Apply demo resistance based on current settings (called on spawn/class change)
+v ApplyDemoResistance(i client) {
+    if (!IsValidClient(client)) return;
+    
+    TFClassType playerClass = TF2_GetPlayerClass(client);
+    f desiredValue = 0.0;
+    b shouldApply = false;
+    
+    // Determine desired resistance value based on settings and class
+    if (playerClass == TFClass_DemoMan) {
+        if (!g_bDemoResistEnabled) {
+            // Demo resistance disabled = apply vulnerability (1.25 = 25% more damage)
+            desiredValue = 1.25;
+            shouldApply = true;
+        } else {
+            // Demo resistance enabled = remove attribute (let shield work normally)
+            shouldApply = false;
+        }
+    }
+    
+    // Only update if the value has changed (performance optimization)
+    if (shouldApply) {
+        if (!g_bDemoResistApplied[client] || g_fCurrentDemoResistValue[client] != desiredValue) {
+            TF2Attrib_SetByName(client, "dmg taken from blast reduced", desiredValue);
+            g_fCurrentDemoResistValue[client] = desiredValue;
+            g_bDemoResistApplied[client] = true;
+        }
+    } else {
+        if (g_bDemoResistApplied[client]) {
+            TF2Attrib_RemoveByName(client, "dmg taken from blast reduced");
+            g_fCurrentDemoResistValue[client] = 0.0;
+            g_bDemoResistApplied[client] = false;
+        }
+    }
+}
+
+// Start resupply timer for a client
+v StartResupplyTimer(i client) {
+    if (g_hResupplyTimer[client] != null) {
+        delete g_hResupplyTimer[client];
+    }
+    
+    // Create repeating timer that checks every 0.1 seconds
+    g_hResupplyTimer[client] = CreateTimer(0.1, Timer_ResupplyCheck, client, TIMER_REPEAT);
+}
+
+// Stop resupply timer for a client
+v StopResupplyTimer(i client) {
+    if (g_hResupplyTimer[client] != null) {
+        delete g_hResupplyTimer[client];
+        g_hResupplyTimer[client] = null;
+    }
+}
+
+// Timer callback for resupply checking
+pub Act Timer_ResupplyCheck(Handle timer, any client) {
+    // Validate client
+    if (!IsValidClientAlive(client) || !g_bResupplyDn[client] || g_bResupplyUp[client]) {
+        StopResupplyTimer(client);
+        return Plugin_Stop;
+    }
+    
+    // Check if in spawn room and try to resupply
+    if (IsClientInSpawnroom(client)) {
+        Resupply(client);
+        StopResupplyTimer(client); // Stop after successful resupply
+        return Plugin_Stop;
+    }
+    
+    return Plugin_Continue;
+}
+
+// Hook for weapon switch events (infinite ammo optimization)
+pub v Hook_WeaponSwitchPost(i client, i weapon) {
+    if (!IsMatch() && g_bImmunityAmmoEnabled && g_bInfiniteAmmo[client] && TF2_GetPlayerClass(client) != TFClass_Medic) {
+        // Refresh ammo when weapon is switched
+        RefreshInfiniteAmmo(client, weapon);
+    }
+}
+
+// Hook for post-think events (infinite ammo optimization)
+pub v Hook_PostThinkPost(i client) {
+    // Early exit if not needed
+    if (IsMatch() || !g_bImmunityAmmoEnabled || !g_bInfiniteAmmo[client] || TF2_GetPlayerClass(client) == TFClass_Medic) {
+        return;
+    }
+    
+    // Only check every few frames to reduce overhead
+    static i frameCounter[MAXPLAYERS];
+    if (++frameCounter[client] >= 5) { // Check every 5 frames
+        frameCounter[client] = 0;
+        
+        i weapon = GetEntPropEnt(client, Prop_Send, "m_hActiveWeapon");
+        if (weapon != -1 && IsValidEntity(weapon)) {
+            RefreshInfiniteAmmo(client, weapon);
+        }
+    }
+}
+
+// Refresh infinite ammo for a specific weapon
+v RefreshInfiniteAmmo(i client, i weapon) {
+    if (!IsValidEntity(weapon)) return;
+    
+    // Check if ammo needs refreshing
+    i currentClip = GetEntProp(weapon, Prop_Send, "m_iClip1");
+    if (currentClip < 19) {
+        SetEntProp(weapon, Prop_Send, "m_iClip1", 19);
+        SetAmmo(client, weapon, 84);
+    }
+}
+
+// Map start event - rebuild entity cache
+pub v OnMapStart() {
+    // Rebuild entity cache when map changes
+    CreateTimer(1.0, Timer_DelayedCacheBuild, 0, TIMER_FLAG_NO_MAPCHANGE);
+}
+
+// Delayed cache build timer
+pub Act Timer_DelayedCacheBuild(Handle timer) {
+    BuildEntityCache();
+    return Plugin_Stop;
 }
