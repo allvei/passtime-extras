@@ -124,9 +124,6 @@ ArrayList g_hCachedSpawnPoints[2] = {null, null}; // RED and BLU spawn points
 f g_fCurrentDemoResistValue[MAXPLAYERS]; // Track current applied resistance value
 b g_bDemoResistApplied[MAXPLAYERS];      // Track if resistance is currently applied
 
-// Performance optimization: resupply timers
-Handle g_hResupplyTimer[MAXPLAYERS] = {null, ...};
-
 // Performance optimization: static ammo arrays (replace ArrayList allocations)
 i g_iStaticOriginalAmmo[MAXPLAYERS][34]; // 2 clip values + 32 ammo types
 b g_bStaticAmmoValid[MAXPLAYERS];        // Track if ammo data is valid
@@ -209,7 +206,6 @@ pub OnPluginStart() {
         // Initialize performance optimization arrays
         g_fCurrentDemoResistValue[n] = 0.0;
         g_bDemoResistApplied[n]      = false;
-        g_hResupplyTimer[n]          = null;
         g_bStaticAmmoValid[n]        = false;
         
         // Initialize static ammo array
@@ -226,6 +222,9 @@ pub OnPluginStart() {
         if ( IsClientInGame(n) ) {
             SDKHook( n, SDKHook_OnTakeDamage,     Hook_OnTakeDamage );
             SDKHook( n, SDKHook_OnTakeDamagePost, Hook_OnTakeDamagePost );
+            
+            // Load cookies for currently connected clients on plugin load/reload
+            LoadClientCookies(n);
         }
     }
     
@@ -238,8 +237,28 @@ pub OnPluginStart() {
     BuildEntityCache();
 }
 
-// PERFORMANCE OPTIMIZED: OnGameFrame() now only handles critical per-frame logic
-// Most functionality moved to event-driven hooks
+// Load infinite ammo and immunity cookies for a client on plugin load/reload
+v LoadClientCookies(i client) {
+    if (!IsClientInGame(client) || IsFakeClient(client)) return;
+    
+    // Only load cookies if they are cached (Steam is online)
+    if (AreClientCookiesCached(client)) {
+        // Only load ammo cookie if player is alive and has a weapon
+        // This prevents ArrayList errors during plugin startup
+        if (IsPlayerAlive(client)) {
+            i weapon = GetEntPropEnt(client, Prop_Send, "m_hActiveWeapon");
+            if (weapon != -1 && IsValidEntity(weapon)) {
+                GetAmmoCookie(client);
+            }
+        }
+        
+        // Immunity and FOV cookies don't require weapons, so they're safe to load
+        GetImmunityCookie(client);
+        GetFOVCookie(client);
+    }
+}
+
+// OnGameFrame() with immediate response for resupply and ammo
 pub v OnGameFrame() {
     // Only validate entity cache periodically (every 30 frames = ~0.5 seconds)
     static i frameCounter = 0;
@@ -248,20 +267,32 @@ pub v OnGameFrame() {
         ValidateEntityCache();
     }
     
-    // All other logic moved to event-driven hooks:
-    // - Demo resistance: Applied on spawn/class change
-    // - Infinite ammo: Handled by weapon hooks
-    // - Resupply: Uses RequestFrame timers
+    FOR_EACH_CLIENT( client ) {
+        if ( !IsValidClientAlive( client ) ) continue;
+        
+        // Handle infinite ammo excluding medics
+        if ( !IsMatch() && g_bImmunityAmmoEnabled && g_bInfiniteAmmo[ client ] && TF2_GetPlayerClass(client) != TFClass_Medic ) {
+            // Get the active weapon
+            i weapon = GetEntPropEnt( client, Prop_Send, "m_hActiveWeapon" );
+            if ( weapon != -1 && IsValidEntity( weapon ) ) {
+                SetEntProp( weapon, Prop_Send, "m_iClip1", 19 );
+                SetAmmo( client, weapon, 84 );
+            }
+        }
+        
+        // Check for buffered resupply (only if globally enabled)
+        if (g_bResupplyEnabled && g_bResupplyDn[client] && !g_bResupplyUp[client] && IsClientInSpawnroom(client)) {
+            Resupply(client);
+        }
+    }
+    
+    // Only demo resistance moved to event-driven hooks (applied on spawn/class change)
 }
 
 // Hook per-client when they enter the server so our damage filter is active
 pub v OnClientPutInServer( i client ) {
     SDKHook( client, SDKHook_OnTakeDamage,     Hook_OnTakeDamage );
     SDKHook( client, SDKHook_OnTakeDamagePost, Hook_OnTakeDamagePost );
-    
-    // PERFORMANCE OPTIMIZATION: Hook weapon events for infinite ammo
-    SDKHook( client, SDKHook_WeaponSwitchPost, Hook_WeaponSwitchPost );
-    SDKHook( client, SDKHook_PostThinkPost,    Hook_PostThinkPost );
     
     // Initialize performance tracking for this client
     g_fCurrentDemoResistValue[client] = 0.0;
@@ -275,7 +306,7 @@ pub v OnClientPutInServer( i client ) {
     }
 }
 
-// PERFORMANCE OPTIMIZED: Use cached timer entity
+// Use cached timer entity
 b IsMatch() {
     // Match is not active if game is awaiting ready restart, timer is paused, or timer is disabled
     b awaitingReadyRestart = as<b>(GameRules_GetProp("m_bAwaitingReadyRestart"));
@@ -555,7 +586,7 @@ NEW_CMD(CSetClass) {
     PH;
 }
 
-// PERFORMANCE OPTIMIZED: Select a random player from targets or custom strings
+// Select a random player from targets or custom strings
 NEW_CMD(CDice) {
     if (args < 1) return EndCmd(client, "Usage: sm_dice <\"customstring\" | #userid | playername | @team>");
 
@@ -564,16 +595,77 @@ NEW_CMD(CDice) {
     i allTargets[MAXPLAYERS];
     i totalTargetCount = 0;
     
-    // Process each argument using SourceMod helpers
-    for (i argIndex = 1; argIndex <= args; argIndex++) {
-        c arg[64];
-        GetCmdArg(argIndex, arg, sizeof(arg));
+    // Get the full command string to handle quoted arguments properly
+    c fullCmd[256];
+    GetCmdArgString(fullCmd, sizeof(fullCmd));
+    
+    // Parse arguments manually to handle quotes correctly
+    c arguments[10][64];
+    i argCount = 0;
+    i pos = 0;
+    i len = strlen(fullCmd);
+    
+    while (pos < len && argCount < 10) {
+        // Skip leading spaces
+        while (pos < len && (fullCmd[pos] == ' ' || fullCmd[pos] == '\t')) {
+            pos++;
+        }
         
-        // Check if it's a quoted custom string
-        if (arg[0] == '"' && strlen(arg) > 2 && arg[strlen(arg)-1] == '"') {
-            // Remove quotes and store as custom string
-            strcopy(customStrings[customCount], sizeof(customStrings[]), arg[1]);
-            customStrings[customCount][strlen(customStrings[customCount])-1] = '\0';
+        if (pos >= len) break;
+        
+        i argStart = pos;
+        i argLen = 0;
+        
+        if (fullCmd[pos] == '"') {
+            // Quoted argument - find closing quote
+            pos++; // Skip opening quote
+            argStart = pos;
+            
+            while (pos < len && fullCmd[pos] != '"') {
+                pos++;
+            }
+            
+            if (pos < len) {
+                argLen = pos - argStart;
+                pos++; // Skip closing quote
+            } else {
+                argLen = len - argStart;
+            }
+        } else {
+            // Unquoted argument - read until space
+            while (pos < len && fullCmd[pos] != ' ' && fullCmd[pos] != '\t') {
+                pos++;
+            }
+            argLen = pos - argStart;
+        }
+        
+        // Copy argument
+        if (argLen > 0 && argLen < sizeof(arguments[])) {
+            for (i copyIdx = 0; copyIdx < argLen && copyIdx < sizeof(arguments[]) - 1; copyIdx++) {
+                arguments[argCount][copyIdx] = fullCmd[argStart + copyIdx];
+            }
+            arguments[argCount][argLen] = '\0';
+            argCount++;
+        }
+    }
+    
+    // Process parsed arguments
+    for (i argIndex = 0; argIndex < argCount; argIndex++) {
+        c arg[64];
+        strcopy(arg, sizeof(arg), arguments[argIndex]);
+        
+        // Check if it looks like a number (custom string)
+        b isNumeric = true;
+        for (i j = 0; j < strlen(arg); j++) {
+            if (arg[j] < '0' || arg[j] > '9') {
+                isNumeric = false;
+                break;
+            }
+        }
+        
+        if (isNumeric || strlen(arg) <= 3) {
+            // Treat as custom string
+            strcopy(customStrings[customCount], sizeof(customStrings[]), arg);
             customCount++;
         } else {
             // Try to process as player target
@@ -604,7 +696,7 @@ NEW_CMD(CDice) {
     if (customCount > 0 && totalTargetCount == 0) {
         // Only custom strings - select random custom string
         i random_index = GetRandomInt(0, customCount - 1);
-        PrintToChatAll("Spun the wheel and chose %s", customStrings[random_index]);
+        PrintToChatAll("Rolled %s", customStrings[random_index]);
     } else if (totalTargetCount > 0) {
         // Players found - select random player
         i random_index = GetRandomInt(0, totalTargetCount - 1);
@@ -612,7 +704,11 @@ NEW_CMD(CDice) {
         
         c selected_name[MAX_NAME_LENGTH];
         GetClientName(selected_player, selected_name, sizeof(selected_name));
-        PrintToChatAll("%s was selected by the wheel!", selected_name);
+        PrintToChatAll("%s was rolled!", selected_name);
+    } else if (customCount > 0) {
+        // Mixed case - select from custom strings
+        i random_index = GetRandomInt(0, customCount - 1);
+        PrintToChatAll("Rolled %s", customStrings[random_index]);
     } else {
         Reply(client, "No valid targets or options provided.");
         PH;
@@ -745,7 +841,7 @@ NEW_CMD(CToggleSave) {
     return EndCmd(client, "Save/Load spawn functionality %s", g_bSaveEnabled ? "ENABLED" : "DISABLED");
 }
 
-// PERFORMANCE OPTIMIZED: Backup toggle for demo blast vulnerability
+// Backup toggle for demo blast vulnerability
 NEW_CMD(CToggleDemoResist) {
     if (args != 1) return EndCmd(client, "Usage: sm_enable_demoresist <0|1>");
 
@@ -826,7 +922,6 @@ NEW_EV(EPSpawn) {
     i client = GetClientOfUserId( event.GetInt( "userid" ) );
     if ( !IsValidClient( client ) ) return;
 
-    // PERFORMANCE OPTIMIZATION: Apply demo resistance on spawn instead of per-frame
     ApplyDemoResistance(client);
 
     // Try to restore settings from cookies first
@@ -960,7 +1055,7 @@ pub v RespawnFrame( any client ) {
     if (!IsPlayerAlive(client)) TF2_RespawnPlayer(client);
 }
 
-// PERFORMANCE OPTIMIZED: Command for when resupply key is pressed
+// Command for when resupply key is pressed
 NEW_CMD(CResupplyDn) {
     // Check if resupply is globally enabled
     if (!g_bResupplyEnabled) return EndCmd(client, "Resupply is disabled.");
@@ -972,13 +1067,13 @@ NEW_CMD(CResupplyDn) {
     g_bResupplyDn[client] = true;
     g_bResupplyUp[client] = false;
 
-    // Start resupply timer instead of per-frame polling
-    StartResupplyTimer(client);
+    // Try to resupply immediately if in spawn room
+    Resupply(client);
 
     PH;
 }
 
-// PERFORMANCE OPTIMIZED: Command for when resupply key is released
+// Command for when resupply key is released
 NEW_CMD(CResupplyUp) {
     // Check if client is valid
     if (!IsClientInGame(client)) PH;
@@ -986,9 +1081,8 @@ NEW_CMD(CResupplyUp) {
     // Check if resupply is globally enabled
     if (!g_bResupplyEnabled) PH;
 
-    // Mark the key as up and stop timer
+    // Mark the key as up
     g_bResupplyDn[client] = false;
-    StopResupplyTimer(client);
     PH;
 }
 
@@ -1029,18 +1123,24 @@ b IsColliding(i client, i entity) {
         playerHullMaxs[n] = playerPos[n] + playerMaxs[n];
     }
 
-    // Get entity bounds
-    f entityMins[3], entityMaxs[3];
-    GetEntPropVector(entity, Prop_Send, "m_vecMins", entityMins);
-    GetEntPropVector(entity, Prop_Send, "m_vecMaxs", entityMaxs);
+    // Get entity bounds - use Prop_Data for accurate values and add origin for absolute coordinates
+    f entityOrigin[3], entityMins[3], entityMaxs[3];
+    GetEntPropVector(entity, Prop_Data, "m_vecOrigin", entityOrigin);
+    GetEntPropVector(entity, Prop_Data, "m_vecMins", entityMins);
+    GetEntPropVector(entity, Prop_Data, "m_vecMaxs", entityMaxs);
+    
+    // Convert relative bounds to absolute world coordinates
+    f entityAbsMins[3], entityAbsMaxs[3];
+    AddVectors(entityOrigin, entityMins, entityAbsMins);
+    AddVectors(entityOrigin, entityMaxs, entityAbsMaxs);
 
-    // Check if player hull intersects with entity bounds
-    return (playerHullMaxs[0] >= entityMins[0] && playerHullMins[0] <= entityMaxs[0] &&
-            playerHullMaxs[1] >= entityMins[1] && playerHullMins[1] <= entityMaxs[1] &&
-            playerHullMaxs[2] >= entityMins[2] && playerHullMins[2] <= entityMaxs[2]);
+    // Check if player hull intersects with entity bounds (now in absolute coordinates)
+    return (playerHullMaxs[0] >= entityAbsMins[0] && playerHullMins[0] <= entityAbsMaxs[0] &&
+            playerHullMaxs[1] >= entityAbsMins[1] && playerHullMins[1] <= entityAbsMaxs[1] &&
+            playerHullMaxs[2] >= entityAbsMins[2] && playerHullMins[2] <= entityAbsMaxs[2]);
 }
 
-// PERFORMANCE OPTIMIZED: Check if a player is touching any func_respawnroom entities of their own team
+// Check if a player is touching any func_respawnroom entities of their own team
 b IsClientInSpawnroom(i client) {
     // Use cached spawn room entities instead of searching
     i clientTeam = GetClientTeam(client);
@@ -1055,7 +1155,7 @@ b IsClientInSpawnroom(i client) {
     return false;
 }
 
-// PERFORMANCE OPTIMIZED: Get distance to nearest spawn point of player's team
+// Get distance to nearest spawn point of player's team
 b IsTooFarFromSpawnpoint(i client) {
     f playerPos[3];
     GetClientAbsOrigin(client, playerPos);
@@ -1088,7 +1188,7 @@ b IsTooFarFromSpawnpoint(i client) {
     }
 }
 
-// PERFORMANCE OPTIMIZED: Called when a client disconnects
+// Called when a client disconnects
 pub OnClientDisconnect(i client) {
     g_bResupplyDn[   client] = false;
     g_bResupplyUp[   client] = false;
@@ -1113,7 +1213,6 @@ pub OnClientDisconnect(i client) {
     g_fCurrentDemoResistValue[client] = 0.0;
     g_bDemoResistApplied[client]      = false;
     g_bStaticAmmoValid[client]        = false;
-    StopResupplyTimer(client);
     
     // Clear static ammo array
     for (i j = 0; j < 34; j++) {
@@ -1253,7 +1352,7 @@ b GetImmunityCookie(i client) {
     return true;
 }
 
-// PERFORMANCE OPTIMIZED: Static array version of SetInitAmmo (no ArrayList allocation)
+// Static array version of SetInitAmmo (no ArrayList allocation)
 pub v SetInitAmmoStatic( i client ) {
     // Get the active weapon
     i weapon = GetEntPropEnt( client, Prop_Send, "m_hActiveWeapon" );
@@ -1271,7 +1370,7 @@ pub v SetInitAmmoStatic( i client ) {
     g_bStaticAmmoValid[client] = true;
 }
 
-// PERFORMANCE OPTIMIZED: Static array version of GetInitAmmo
+// Static array version of GetInitAmmo
 pub v GetInitAmmoStatic( i client ) {
     // Check if player has valid stored ammo data
     if (!g_bStaticAmmoValid[client]) return;
@@ -1298,7 +1397,10 @@ pub v SetInitAmmo( i client ) {
     }
 
     // Create new ArrayList for this player
-    g_hOriginalAmmo[client] = new ArrayList(34); // 2 clip values + 32 ammo types
+    g_hOriginalAmmo[client] = new ArrayList();
+    
+    // Resize ArrayList to hold 34 elements (2 clip values + 32 ammo types)
+    g_hOriginalAmmo[client].Resize(34);
 
     // Get the active weapon
     i weapon = GetEntPropEnt( client, Prop_Send, "m_hActiveWeapon" );
@@ -1361,7 +1463,7 @@ pub v Hook_OnTakeDamagePost( i victim, i attacker, i inflictor, f damage, i dama
 // PERFORMANCE OPTIMIZATION HELPER FUNCTIONS
 // ====================================================================================================
 
-// Build entity cache for performance optimization
+// Build entity cache
 v BuildEntityCache() {
     // Clear existing cache
     g_hCachedSpawnRooms.Clear();
@@ -1403,7 +1505,7 @@ v BuildEntityCache() {
                   g_hCachedSpawnRooms.Length, g_hCachedSpawnPoints[RED].Length, g_hCachedSpawnPoints[BLU].Length, g_iCachedTimerEntity);
 }
 
-// Validate entity cache (called periodically)
+// Validate entity cache
 v ValidateEntityCache() {
     b needsRebuild = false;
     
@@ -1439,7 +1541,6 @@ v ValidateEntityCache() {
     }
 }
 
-// Apply demo resistance based on current settings (called on spawn/class change)
 v ApplyDemoResistance(i client) {
     if (!IsValidClient(client)) return;
     
@@ -1475,82 +1576,6 @@ v ApplyDemoResistance(i client) {
     }
 }
 
-// Start resupply timer for a client
-v StartResupplyTimer(i client) {
-    if (g_hResupplyTimer[client] != null) {
-        delete g_hResupplyTimer[client];
-    }
-    
-    // Create repeating timer that checks every 0.1 seconds
-    g_hResupplyTimer[client] = CreateTimer(0.1, Timer_ResupplyCheck, client, TIMER_REPEAT);
-}
-
-// Stop resupply timer for a client
-v StopResupplyTimer(i client) {
-    if (g_hResupplyTimer[client] != null) {
-        delete g_hResupplyTimer[client];
-        g_hResupplyTimer[client] = null;
-    }
-}
-
-// Timer callback for resupply checking
-pub Act Timer_ResupplyCheck(Handle timer, any client) {
-    // Validate client
-    if (!IsValidClientAlive(client) || !g_bResupplyDn[client] || g_bResupplyUp[client]) {
-        StopResupplyTimer(client);
-        return Plugin_Stop;
-    }
-    
-    // Check if in spawn room and try to resupply
-    if (IsClientInSpawnroom(client)) {
-        Resupply(client);
-        StopResupplyTimer(client); // Stop after successful resupply
-        return Plugin_Stop;
-    }
-    
-    return Plugin_Continue;
-}
-
-// Hook for weapon switch events (infinite ammo optimization)
-pub v Hook_WeaponSwitchPost(i client, i weapon) {
-    if (!IsMatch() && g_bImmunityAmmoEnabled && g_bInfiniteAmmo[client] && TF2_GetPlayerClass(client) != TFClass_Medic) {
-        // Refresh ammo when weapon is switched
-        RefreshInfiniteAmmo(client, weapon);
-    }
-}
-
-// Hook for post-think events (infinite ammo optimization)
-pub v Hook_PostThinkPost(i client) {
-    // Early exit if not needed
-    if (IsMatch() || !g_bImmunityAmmoEnabled || !g_bInfiniteAmmo[client] || TF2_GetPlayerClass(client) == TFClass_Medic) {
-        return;
-    }
-    
-    // Only check every few frames to reduce overhead
-    static i frameCounter[MAXPLAYERS];
-    if (++frameCounter[client] >= 5) { // Check every 5 frames
-        frameCounter[client] = 0;
-        
-        i weapon = GetEntPropEnt(client, Prop_Send, "m_hActiveWeapon");
-        if (weapon != -1 && IsValidEntity(weapon)) {
-            RefreshInfiniteAmmo(client, weapon);
-        }
-    }
-}
-
-// Refresh infinite ammo for a specific weapon
-v RefreshInfiniteAmmo(i client, i weapon) {
-    if (!IsValidEntity(weapon)) return;
-    
-    // Check if ammo needs refreshing
-    i currentClip = GetEntProp(weapon, Prop_Send, "m_iClip1");
-    if (currentClip < 19) {
-        SetEntProp(weapon, Prop_Send, "m_iClip1", 19);
-        SetAmmo(client, weapon, 84);
-    }
-}
-
-// Map start event - rebuild entity cache
 pub v OnMapStart() {
     // Rebuild entity cache when map changes
     CreateTimer(1.0, Timer_DelayedCacheBuild, 0, TIMER_FLAG_NO_MAPCHANGE);
