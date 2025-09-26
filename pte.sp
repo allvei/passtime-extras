@@ -143,6 +143,8 @@ pub OnPluginStart() {
     ACS( "sm_enable_saveload",   "sm_sl",   CToggleSave,       GENERIC, "Toggle save/load spawn functionality" );
     ACS( "sm_enable_demoresist", "sm_dr",   CToggleDemoResist, GENERIC, "Toggle demo blast vulnerability" );
     ACS( "sm_list_blast_attrib", "sm_lba",  CListBlastAttrib,  GENERIC, "Debug: list entities with blast attributes" );
+    ACS( "sm_add_tag",           "sm_atag", CAddTag,           GENERIC, "Add prefix tag to all players on a team" );
+    ACS( "sm_remove_tag",        "sm_rtag", CRemoveTag,        GENERIC, "Remove prefix tag from all players on a team" );
 
     // Runner commands
     ACS( "sm_setteam",           "sm_st",   CSetTeam,          GENERIC, "Set a client's team" );
@@ -972,6 +974,151 @@ NEW_CMD(CListBlastAttrib) {
         Reply(client, "No players currently have blast resistance attributes applied.");
     } else {
         Reply(client, "Total players with blast resistance: %d", count);
+    }
+    
+    PH;
+}
+
+// Add prefix tag to all players on a team
+NEW_CMD(CAddTag) {
+    if (args != 2) return EndCmd(client, "Usage: sm_add_tag <red|blu> <tag>");
+    
+    c teamArg[10];
+    c tagArg[8];
+    
+    GetCmdArg(1, teamArg, sizeof(teamArg));
+    GetCmdArg(2, tagArg, sizeof(tagArg));
+    
+    // Validate team
+    i teamIndex = ParseTeamIndex(teamArg);
+    if (teamIndex == -1) return EndCmd(client, "Invalid team. Use 'red|r' or 'blu|blue|b'.");
+    
+    // Validate tag length (max 7 characters)
+    if (strlen(tagArg) < 1) return EndCmd(client, "Tag cannot be empty.");
+    if (strlen(tagArg) > 7) return EndCmd(client, "Tag cannot be longer than 7 characters.");
+    
+    // Apply tag to all players on the team
+    i playersTagged = 0;
+    TFTeam targetTeam = (teamIndex == RED) ? TFTeam_Red : TFTeam_Blue;
+    
+    FOR_EACH_CLIENT(n) {
+        if (!IsClientInGame(n) || IsFakeClient(n)) continue;
+        if (TF2_GetClientTeam(n) != targetTeam) continue;
+        
+        // Get current name
+        c currentName[MAX_NAME_LENGTH];
+        GetClientName(n, currentName, sizeof(currentName));
+        
+        // Check if name already has this tag
+        if (StrContains(currentName, tagArg, false) == 0) continue; // Skip if already has tag at start
+        
+        // Create new name with tag prefix
+        c newName[MAX_NAME_LENGTH];
+        Format(newName, sizeof(newName), "%s %s", tagArg, currentName);
+        
+        // Ensure new name doesn't exceed max length
+        if (strlen(newName) > MAX_NAME_LENGTH - 1) {
+            // Truncate original name to fit
+            i maxOriginalLength = MAX_NAME_LENGTH - strlen(tagArg) - 2; // -2 for space and null terminator
+            if (maxOriginalLength > 0) {
+                c truncatedName[MAX_NAME_LENGTH];
+                strcopy(truncatedName, maxOriginalLength + 1, currentName);
+                Format(newName, sizeof(newName), "%s %s", tagArg, truncatedName);
+            } else {
+                continue; // Skip if tag is too long
+            }
+        }
+        
+        // Set the new name
+        SetClientName(n, newName);
+        playersTagged++;
+    }
+    
+    // Report results
+    c teamName[10];
+    if (teamIndex == RED) {
+        STRCP(teamName, "RED");
+    } else {
+        STRCP(teamName, "BLU");
+    }
+    
+    if (playersTagged > 0) {
+        c adminName[MAX_NAME_LENGTH];
+        GetClientName(client, adminName, sizeof(adminName));
+        PrintToChatAll("Admin %s added tag \"%s\" to %d players on team %s", adminName, tagArg, playersTagged, teamName);
+        Reply(client, "Successfully added tag \"%s\" to %d players on team %s", tagArg, playersTagged, teamName);
+    } else {
+        Reply(client, "No players were tagged on team %s (team empty or all players already have this tag)", teamName);
+    }
+    
+    PH;
+}
+
+// Remove prefix tag from all players on a team
+NEW_CMD(CRemoveTag) {
+    if (args != 2) return EndCmd(client, "Usage: sm_remove_tag <red|blu> <tag>");
+    
+    c teamArg[10];
+    c tagArg[8];
+    
+    GetCmdArg(1, teamArg, sizeof(teamArg));
+    GetCmdArg(2, tagArg, sizeof(tagArg));
+    
+    // Validate team
+    i teamIndex = ParseTeamIndex(teamArg);
+    if (teamIndex == -1) return EndCmd(client, "Invalid team. Use 'red|r' or 'blu|blue|b'.");
+    
+    // Validate tag length
+    if (strlen(tagArg) < 1) return EndCmd(client, "Tag cannot be empty.");
+    if (strlen(tagArg) > 7) return EndCmd(client, "Tag cannot be longer than 7 characters.");
+    
+    // Remove tag from all players on the team
+    i playersUntagged = 0;
+    TFTeam targetTeam = (teamIndex == RED) ? TFTeam_Red : TFTeam_Blue;
+    
+    FOR_EACH_CLIENT(n) {
+        if (!IsClientInGame(n) || IsFakeClient(n)) continue;
+        if (TF2_GetClientTeam(n) != targetTeam) continue;
+        
+        // Get current name
+        c currentName[MAX_NAME_LENGTH];
+        GetClientName(n, currentName, sizeof(currentName));
+        
+        // Check if name starts with the tag followed by a space
+        c tagWithSpace[10];
+        Format(tagWithSpace, sizeof(tagWithSpace), "%s ", tagArg);
+        
+        if (StrContains(currentName, tagWithSpace, false) == 0) {
+            // Remove the tag prefix (tag + space)
+            c newName[MAX_NAME_LENGTH];
+            strcopy(newName, sizeof(newName), currentName[strlen(tagWithSpace)]);
+            
+            // Ensure we don't end up with an empty name
+            if (strlen(newName) < 1) {
+                strcopy(newName, sizeof(newName), "Player");
+            }
+            
+            // Set the new name
+            SetClientName(n, newName);
+            playersUntagged++;
+        }
+    }
+    
+    // Report results
+    c teamName[10];
+    if (teamIndex == RED) {
+        STRCP(teamName, "RED");
+    } else {
+        STRCP(teamName, "BLU");
+    }
+    
+    if (playersUntagged > 0) {
+        c adminName[MAX_NAME_LENGTH];
+        GetClientName(client, adminName, sizeof(adminName));
+        PrintToChatAll("Admin %s removed tag \"%s\" from %d players on team %s", adminName, tagArg, playersUntagged, teamName);
+        Reply(client, "Successfully removed tag \"%s\" from %d players on team %s", tagArg, playersUntagged, teamName);
+    } else {
+        Reply(client, "No players had tag \"%s\" removed on team %s", tagArg, teamName);
     }
     
     PH;
