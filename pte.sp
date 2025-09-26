@@ -153,10 +153,10 @@ pub OnPluginStart() {
     CCS( "sm_load",              "sm_ld",   CLoadSpawn,        "Teleport to saved spawn" );
     CCS( "sm_immune",            "sm_i",    CImmune,           "Toggle immunity" );
     CCS( "sm_ammo",              "sm_a",    CInfiniteAmmo,     "Toggle infinite ammo" );
-    CCS( "sm_fov",               "sm_fov",  CSetFOV,           "Set your field of view." );
     CCS( "sm_diceroll",          "sm_dice", CDice,             "Select a random player from targets" );
     CCS( "sm_ready",             "sm_r",    CReady,            "Toggle your team's ready state" );
     CCS( "sm_team_name",         "sm_tn",   CTeamName,         "Rename your team" );
+    CC(  "sm_fov",                          CSetFOV,           "Set your field of view." );
     CC(  "+sm_resupply",                    CResupplyDn,       "Resupply inside spawn" );
     CC(  "-sm_resupply",                    CResupplyUp,       "Resupply inside spawn" );
     CC(  "+sm_pt_resupply",                 CResupplyDn,       "Resupply inside spawn" );
