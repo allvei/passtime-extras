@@ -135,7 +135,7 @@ i g_iSavedAmmoCount[MAXSLOTS][2];
 
 pub OnPluginStart() {
     // Admin commands
-    ACS( "sm_ready",             "sm_rdy",  CReady,            GENERIC, "Set a team's ready status" );
+    ACS( "sm_force_ready",       "sm_fr",   CForceReady,       GENERIC, "Set a team's ready status" );
     ACS( "sm_debug_roundtime",   "sm_drt",  CDebugRoundTime,   GENERIC, "Debug: print team_round_timer info" );
     ACS( "sm_enable_resupply",   "sm_res",  CToggleResupply,   GENERIC, "Toggle resupply functionality" );
     ACS( "sm_enable_respawn",    "sm_resp", CToggleRespawn,    GENERIC, "Toggle instant respawn" );
@@ -155,6 +155,8 @@ pub OnPluginStart() {
     CCS( "sm_ammo",              "sm_a",    CInfiniteAmmo,     "Toggle infinite ammo" );
     CCS( "sm_fov",               "sm_fov",  CSetFOV,           "Set your field of view." );
     CCS( "sm_diceroll",          "sm_dice", CDice,             "Select a random player from targets" );
+    CCS( "sm_ready",             "sm_r",    CReady,            "Toggle your team's ready state" );
+    CCS( "sm_team_name",         "sm_tn",   CTeamName,         "Rename your team" );
     CC(  "+sm_resupply",                    CResupplyDn,       "Resupply inside spawn" );
     CC(  "-sm_resupply",                    CResupplyUp,       "Resupply inside spawn" );
     CC(  "+sm_pt_resupply",                 CResupplyDn,       "Resupply inside spawn" );
@@ -329,7 +331,7 @@ b IsMatch() {
 // ====================================================================================================
 
 // Command to set a team's ready status
-NEW_CMD(CReady) {
+NEW_CMD(CForceReady) {
     if (IsMatch()) PCO;
 
     if ( args != 2 ) return EndCmd( client, "Usage: sm_ready <red|blu> <0|1>" );
@@ -713,6 +715,97 @@ NEW_CMD(CDice) {
         Reply(client, "No valid targets or options provided.");
         PH;
     }
+    
+    PH;
+}
+
+// Toggle ready state for the user's team
+NEW_CMD(CReady) {
+    if (IsMatch()) return EndCmd(client, "Ready command can only be used during preround.");
+    if (args != 0) return EndCmd(client, "Usage: sm_ready");
+    
+    // Get client's team
+    TFTeam clientTeam = TF2_GetClientTeam(client);
+    if (clientTeam != TFTeam_Red && clientTeam != TFTeam_Blue) {
+        return EndCmd(client, "You must be on RED or BLU team to use this command.");
+    }
+    
+    // Convert TF team to array index
+    i teamIndex = (clientTeam == TFTeam_Red) ? RED : BLU;
+    
+    // Toggle ready state
+    g_bIsTeamReady[teamIndex] = !g_bIsTeamReady[teamIndex];
+    
+    // Update game rules
+    i gameRulesTeamOffset = teamIndex + TEAM_OFFSET;
+    GameRules_SetProp("m_bTeamReady", g_bIsTeamReady[teamIndex] ? 1 : 0, 1, gameRulesTeamOffset);
+    
+    // Get team name for display
+    c teamName[10];
+    if (clientTeam == TFTeam_Red) {
+        STRCP(teamName, "RED");
+    } else {
+        STRCP(teamName, "BLU");
+    }
+    
+    // Announce to all players
+    c playerName[MAX_NAME_LENGTH];
+    GetClientName(client, playerName, sizeof(playerName));
+    PrintToChatAll("%s set team %s to %s", playerName, teamName, g_bIsTeamReady[teamIndex] ? "READY" : "NOT READY");
+    
+    PH;
+}
+
+// Rename team command
+NEW_CMD(CTeamName) {
+    if (IsMatch()) return EndCmd(client, "Team rename command can only be used during preround.");
+    if (args != 1) return EndCmd(client, "Usage: sm_team_name <new_name>");
+    
+    // Get client's team
+    TFTeam clientTeam = TF2_GetClientTeam(client);
+    if (clientTeam != TFTeam_Red && clientTeam != TFTeam_Blue) {
+        return EndCmd(client, "You must be on RED or BLU team to use this command.");
+    }
+    
+    // Get new team name
+    c newName[64];
+    GetCmdArg(1, newName, sizeof(newName));
+    
+    // Validate name length
+    if (strlen(newName) < 1) return EndCmd(client, "Team name cannot be empty.");
+    if (strlen(newName) > 32) return EndCmd(client, "Team name cannot be longer than 32 characters.");
+    
+    // Get team entity
+    i teamEntity = -1;
+    if (clientTeam == TFTeam_Red) {
+        teamEntity = FindEntityByClassname(-1, "tf_team");
+        while (teamEntity != -1 && GetEntProp(teamEntity, Prop_Send, "m_iTeamNum") != 2) {
+            teamEntity = FindEntityByClassname(teamEntity, "tf_team");
+        }
+    } else {
+        teamEntity = FindEntityByClassname(-1, "tf_team");
+        while (teamEntity != -1 && GetEntProp(teamEntity, Prop_Send, "m_iTeamNum") != 3) {
+            teamEntity = FindEntityByClassname(teamEntity, "tf_team");
+        }
+    }
+    
+    if (teamEntity == -1) return EndCmd(client, "Could not find team entity.");
+    
+    // Set the team name
+    SetEntPropString(teamEntity, Prop_Data, "m_szTeamname", newName);
+    
+    // Get old team name for display
+    c oldTeamName[10];
+    if (clientTeam == TFTeam_Red) {
+        STRCP(oldTeamName, "RED");
+    } else {
+        STRCP(oldTeamName, "BLU");
+    }
+    
+    // Announce to all players
+    c playerName[MAX_NAME_LENGTH];
+    GetClientName(client, playerName, sizeof(playerName));
+    PrintToChatAll("%s renamed team %s to \"%s\"", playerName, oldTeamName, newName);
     
     PH;
 }
