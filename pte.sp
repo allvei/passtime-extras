@@ -1,15 +1,15 @@
 // Imports
-#include <sdktools_functions>
-#include <sourcemod>
-#include <tf2>
-#include <tf2_stocks>
 #include <clientprefs>
 #include <clients>
-#include <sdktools>
+#include <sdkhooks>
+#include <sdktools_entoutput>
+#include <sdktools_functions>
 #include <sdktools_gamerules>
 #include <sdktools_trace>
-#include <sdktools_entoutput>
-#include <sdkhooks>
+#include <sdktools>
+#include <sourcemod>
+#include <tf2_stocks>
+#include <tf2>
 #include <tf2attributes>
 
 #pragma semicolon 1
@@ -39,23 +39,29 @@
 #define b     bool
 #define c     char
 #define Reply ReplyToCommand
+#define elif  else if
 
 #define CC    RegConsoleCmd
 #define CCS   RegConsoleCmdWithShort
 #define AC    RegAdminCmd
 #define ACS   RegAdminCmdWithShort
 
-#define HE    HookEvent
-#define NOTIFY FCVAR_NOTIFY
-#define GENERIC ADMFLAG_GENERIC
+#define HE             HookEvent
+#define NOTIFY         FCVAR_NOTIFY
+#define GENERIC        ADMFLAG_GENERIC
 #define FindEntByClass FindEntityByClassname
 
-#define NEW_CMD(%1)     Pac %1( i client, i args )
-#define NEW_EV_ACT(%1)  Pac %1( Ev event, const c[] name, b dontBroadcast )
-#define NEW_EV(%1)      pub %1( Ev event, const c[] name, b dontBroadcast )
-#define STRCP(%1,%2)    strcopy(%1, sizeof(%1), %2)
+#define GET_ARG(%1, %2, %3) c %2[%3]; GetCmdArg(%1, %2, %3)
+#define NEW_CMD(%1)         Pac %1( i client, i args )
+#define NEW_EV_ACT(%1)      Pac %1( Ev event, const c[] name, b dontBroadcast )
+#define NEW_EV(%1)          pub %1( Ev event, const c[] name, b dontBroadcast )
+#define STRCP(%1,%2)        strcopy(%1, sizeof(%1), %2)
 #define FOR_EACH_CLIENT(%1) for ( i %1 = 1; %1 <= MaxClients; %1++ )
-#define FOR_EACH_ENT(%1) for ( i %1 = 1; %1 <= EDICT; %1++ )
+#define FOR_EACH_ENT(%1)    for ( i %1 = 1; %1 <= EDICT; %1++ )
+#define END_CMD(%1)         return EndCommand(client, %1)
+#define END_CMD2(%1, %2)        return EndCommand(%1, %2)
+#define END_CMD3(%1, %2, %3)    return EndCommand(%1, %2, %3)
+#define END_CMD4(%1, %2, %3, %4) return EndCommand(%1, %2, %3, %4)
 
 public Plugin myinfo = {
     name        = "passtime.tf extras",
@@ -70,6 +76,7 @@ Han g_hCookieFOV;
 Han g_hCookieInfiniteAmmo;
 Han g_hCookieImmunity;
 
+// ConVars
 ConVar g_cvFOVMin;
 ConVar g_cvFOVMax;
 
@@ -122,11 +129,11 @@ ArrayList g_hCachedSpawnPoints[2] = {null, null}; // RED and BLU spawn points
 
 // Performance optimization: demo resistance state tracking
 f g_fCurrentDemoResistValue[MAXPLAYERS]; // Track current applied resistance value
-b g_bDemoResistApplied[MAXPLAYERS];      // Track if resistance is currently applied
+b g_bDemoResistApplied[     MAXPLAYERS]; // Track if resistance is currently applied
 
 // Performance optimization: static ammo arrays (replace ArrayList allocations)
 i g_iStaticOriginalAmmo[MAXPLAYERS][34]; // 2 clip values + 32 ammo types
-b g_bStaticAmmoValid[MAXPLAYERS];        // Track if ammo data is valid
+b g_bStaticAmmoValid[   MAXPLAYERS];     // Track if ammo data is valid
 
 i g_iSavedClip1[    MAXSLOTS];
 i g_iSavedClip2[    MAXSLOTS];
@@ -154,15 +161,15 @@ pub OnPluginStart() {
     CCS( "sm_save",              "sm_sv",   CSaveSpawn,        "Save a spawn point" );
     CCS( "sm_load",              "sm_ld",   CLoadSpawn,        "Teleport to saved spawn" );
     CCS( "sm_immune",            "sm_i",    CImmune,           "Toggle immunity" );
-    CCS( "sm_ammo",              "sm_a",    CInfiniteAmmo,     "Toggle infinite ammo" );
+    CCS( "sm_ammo",              "sm_a",    CInfAmmo,         "Toggle infinite ammo" );
     CCS( "sm_diceroll",          "sm_dice", CDice,             "Select a random player from targets" );
     CCS( "sm_ready",             "sm_r",    CReady,            "Toggle your team's ready state" );
     CCS( "sm_team_name",         "sm_tn",   CTeamName,         "Rename your team" );
     CC(  "sm_fov",                          CSetFOV,           "Set your field of view." );
-    CC(  "+sm_resupply",                    CResupplyDn,       "Resupply inside spawn" );
-    CC(  "-sm_resupply",                    CResupplyUp,       "Resupply inside spawn" );
-    CC(  "+sm_pt_resupply",                 CResupplyDn,       "Resupply inside spawn" );
-    CC(  "-sm_pt_resupply",                 CResupplyUp,       "Resupply inside spawn" );
+    CC(  "+sm_resupply",                    CResupDn,          "Resupply inside spawn" );
+    CC(  "-sm_resupply",                    CResupUp,          "Resupply inside spawn" );
+    CC(  "+sm_pt_resupply",                 CResupDn,          "Resupply inside spawn" );
+    CC(  "-sm_pt_resupply",                 CResupUp,          "Resupply inside spawn" );
 
     g_hCookieFOV          = RegClientCookie( "sm_fov_cookie",          "Desired client field of view", CookieAccess_Private );
     g_hCookieInfiniteAmmo = RegClientCookie( "sm_infiniteammo_cookie", "Infinite ammo setting",        CookieAccess_Private );
@@ -233,7 +240,7 @@ pub OnPluginStart() {
     }
     
     // Initialize entity cache arrays
-    g_hCachedSpawnRooms = new ArrayList();
+    g_hCachedSpawnRooms       = new ArrayList();
     g_hCachedSpawnPoints[RED] = new ArrayList();
     g_hCachedSpawnPoints[BLU] = new ArrayList();
     
@@ -243,7 +250,7 @@ pub OnPluginStart() {
 
 // Load infinite ammo and immunity cookies for a client on plugin load/reload
 v LoadClientCookies(i client) {
-    if (!IsClientInGame(client) || IsFakeClient(client)) return;
+    if (!IsValidClient(client)) return;
     
     // Only load cookies if they are cached (Steam is online)
     if (AreClientCookiesCached(client)) {
@@ -336,20 +343,17 @@ b IsMatch() {
 NEW_CMD(CForceReady) {
     if (IsMatch()) PCO;
 
-    if ( args != 2 ) return EndCmd( client, "Usage: sm_ready <red|blu> <0|1>" );
+    if ( args != 2 ) END_CMD( "Usage: sm_force_ready <red|blu> <0|1>" );
 
-    c teamArg[ 10 ];
-    c statusArg[ 2 ];
-
-    GetCmdArg( 1, teamArg,   sizeof( teamArg ) );
-    GetCmdArg( 2, statusArg, sizeof( statusArg ) );
+    GET_ARG(1, teamArg, 10);
+    GET_ARG(2, statusArg, 2);
 
     i teamIndex = ParseTeamIndex( teamArg );
     i status    = StringToInt( statusArg );
 
     // Validate input
-    if ( teamIndex == -1 ) return EndCmd( client, "Invalid team. Use 'red|r', 'blue|blu|b'." );
-    if ( status < 0 || status > 1 ) return EndCmd( client, "Invalid status. Use 0 (not ready) or 1 (ready)." );
+    if ( teamIndex == -1 ) END_CMD( "Invalid team. Use 'red' or 'blu'." );
+    if ( status < 0 || status > 1 ) END_CMD( "Invalid status. Use 0 (not ready) or 1 (ready)." );
 
     // Set the team's ready status
     i gameRulesTeamOffset = teamIndex + TEAM_OFFSET;
@@ -361,17 +365,14 @@ NEW_CMD(CForceReady) {
     PH;
 }
 
+
 // Change client's team
 NEW_CMD(CSetTeam) {
-    // Parse team argument early so it's available in all code paths
-    c target[33];
-    GetCmdArg(1, target, sizeof(target));
-
-    c input_team[5];
-    GetCmdArg(2, input_team, sizeof(input_team));
+    GET_ARG(1, target,     33);
+    GET_ARG(2, input_team, 5);
     TFTeam team = ParseTeam(input_team);
 
-    if ( args != 2 || team == TFTeam_Unassigned ) return EndCmd( client, "Usage: sm_setteam <#userid|name> <spec|red|blu>", args );
+    if ( args != 2 || team == TFTeam_Unassigned ) END_CMD2( client, "Usage: sm_setteam <#userid|name> <spec|red|blu>" );
 
 
     i target_list[ MAXPLAYERS ];
@@ -407,7 +408,7 @@ NEW_CMD(CSetTeam) {
 
 // Set your field of view
 NEW_CMD(CSetFOV) {
-    if ( args != 1 ) return EndCmd( client, "Usage: sm_fov <fov>" );
+    if ( args != 1 ) END_CMD( "Usage: sm_fov <fov>" );
 
     i fov = GetCmdArgInt( 1 ),
       min = GetConVarInt( g_cvFOVMin ),
@@ -415,11 +416,11 @@ NEW_CMD(CSetFOV) {
 
     if ( fov == 0 ) {
         QueryClientConVar( client, "fov_desired", OnFOVQueried );
-        return EndCmd( client, "Your FOV has been reset." );
+        END_CMD( "Your FOV has been reset." );
     }
 
-    if ( fov < min ) return EndCmd( client, "The minimum FOV you can set is %d.", min );
-    if ( fov > max ) return EndCmd( client, "The maximum FOV you can set is %d.", max );
+    if ( fov < min ) END_CMD3( client, "The minimum FOV you can set is %d.", min );
+    if ( fov > max ) END_CMD3( client, "The maximum FOV you can set is %d.", max );
 
     // Try to store in cookies if available
     b cookieSuccess = false;
@@ -451,10 +452,9 @@ NEW_CMD(CSetFOV) {
 
 // Save a point
 NEW_CMD(CSaveSpawn) {
-    if ( IsMatch() || !g_bSaveEnabled )       return EndCmd( client, "Saving is disabled.");
-    if ( args != 0 )       return EndCmd( client, "Usage: sm_save" );
+    if ( IsMatch() || !g_bSaveEnabled )                                    END_CMD( "Saving is disabled.");
     if ( client <= 0 || client > MaxClients || !IsClientInGame( client ) ) PH;
-    if ( !IsPlayerAlive( client ) ) PH;
+    if ( !IsPlayerAlive( client ) )                                        PH;
 
     GetClientAbsOrigin( client,  g_vSavePos );
     GetClientEyeAngles( client,  g_vSaveAng );
@@ -484,17 +484,15 @@ NEW_CMD(CSaveSpawn) {
     }
     g_bSavedSpawnValid = true;
 
-    EndCmd( client, "Spawn saved!" );
-
-    PH;
+    END_CMD( "Spawn saved!" );
 }
 
 // Load saved point
 NEW_CMD(CLoadSpawn) {
-    if ( IsMatch() || !g_bSaveEnabled ) return EndCmd( client, "Loading is disabled." );
+    if ( IsMatch() || !g_bSaveEnabled )  END_CMD( "Loading is disabled." );
     if ( !IsValidClientAlive( client ) ) PH;
-    if ( args != 0 ) return EndCmd( client, "Usage: sm_load" );
-    if ( !g_bSavedSpawnValid ) return EndCmd( client, "No saved spawn point set yet." );
+    if ( args != 0 )                     END_CMD( "Usage: sm_load" );
+    if ( !g_bSavedSpawnValid )           END_CMD( "No saved spawn point set yet." );
 
     TeleportEntity( client, g_vSavePos, g_vSaveAng, g_vSaveVel );
 
@@ -517,43 +515,39 @@ NEW_CMD(CLoadSpawn) {
 
 // Toggle immunity
 NEW_CMD(CImmune) {
-    if ( IsMatch() || !g_bImmunityAmmoEnabled ) return EndCmd( client, "Immunity is disabled." );
+    if ( IsMatch() || !g_bImmunityAmmoEnabled ) END_CMD( "Immunity is disabled." );
     if ( args == 0 ) g_bImmunity[ client ] = !g_bImmunity[ client ];
-    else return EndCmd( client, "Usage: sm_immune" );
+    else END_CMD( "Usage: sm_immune" );
 
     SetImmunityCookie( client, g_bImmunity[ client ] );
 
     if ( IsPlayerAlive( client ) ) TF2_RespawnPlayer( client );
 
-    Reply( client, "Immunity %s.", g_bImmunity[ client ] ? "enabled" : "disabled" );
-    PH;
+    END_CMD3( client, "Immunity %s.", g_bImmunity[ client ] ? "enabled" : "disabled" );
 }
 
 // Toggle infinite ammo
-NEW_CMD(CInfiniteAmmo) {
-    if ( IsMatch() || !g_bImmunityAmmoEnabled ) return EndCmd( client, "Infinite ammo is disabled." );
+NEW_CMD(CInfAmmo) {
+    if ( IsMatch() || !g_bImmunityAmmoEnabled ) END_CMD( "Infinite ammo is disabled." );
     if ( args == 0 ) g_bInfiniteAmmo[ client ] = !g_bInfiniteAmmo[ client ];
-    else return EndCmd( client, "Usage: sm_ammo" );
+    else END_CMD( "Usage: sm_ammo" );
 
     SetAmmoCookie( client, g_bInfiniteAmmo[ client ] );
 
     if ( IsPlayerAlive( client ) ) TF2_RespawnPlayer( client );
 
-    Reply( client, "Infinite ammo %s.", g_bInfiniteAmmo[ client ] ? "enabled" : "disabled" );
-    PH;
+    END_CMD3( client, "Infinite ammo %s.", g_bInfiniteAmmo[ client ] ? "enabled" : "disabled" );
 }
 
 // Set a player's class
 NEW_CMD(CSetClass) {
-    if ( args != 2 ) return EndCmd( client, "Usage: sm_setclass <#userid|name> <class>" );
+    if ( args != 2 ) END_CMD( "Usage: sm_setclass <#userid|name> <class>" );
 
-    c classArg[ 16 ];
-    GetCmdArg( 2, classArg, sizeof( classArg ) );
+    GET_ARG(2, classArg, 16);
     TFClassType tfclass = ParseClass( classArg );
-    if ( tfclass == TFClass_Unknown ) return EndCmd( client, "Invalid class. Use class name or number" );
+    if ( tfclass == TFClass_Unknown ) END_CMD( "Invalid class. Use class name or number" );
 
-    c targetArg[ 33 ];
-    GetCmdArg( 1, targetArg, sizeof( targetArg ) );
+    GET_ARG(1, targetArg, 33);
 
     i targets[ MAXPLAYERS ];
     c target_name[ MAX_TARGET_LENGTH ];
@@ -592,7 +586,7 @@ NEW_CMD(CSetClass) {
 
 // Select a random player from targets or custom strings
 NEW_CMD(CDice) {
-    if (args < 1) return EndCmd(client, "Usage: sm_dice <\"customstring\" | #userid | playername | @team>");
+    if (args < 1) END_CMD2(client, "Usage: sm_dice <\"customstring\" | #userid | playername | @team>");
 
     c customStrings[10][64]; // Support up to 10 custom strings
     i customCount = 0;
@@ -701,7 +695,7 @@ NEW_CMD(CDice) {
         // Only custom strings - select random custom string
         i random_index = GetRandomInt(0, customCount - 1);
         PrintToChatAll("Rolled %s", customStrings[random_index]);
-    } else if (totalTargetCount > 0) {
+    } elif (totalTargetCount > 0) {
         // Players found - select random player
         i random_index = GetRandomInt(0, totalTargetCount - 1);
         i selected_player = allTargets[random_index];
@@ -709,7 +703,7 @@ NEW_CMD(CDice) {
         c selected_name[MAX_NAME_LENGTH];
         GetClientName(selected_player, selected_name, sizeof(selected_name));
         PrintToChatAll("%s was rolled!", selected_name);
-    } else if (customCount > 0) {
+    } elif (customCount > 0) {
         // Mixed case - select from custom strings
         i random_index = GetRandomInt(0, customCount - 1);
         PrintToChatAll("Rolled %s", customStrings[random_index]);
@@ -723,13 +717,13 @@ NEW_CMD(CDice) {
 
 // Toggle ready state for the user's team
 NEW_CMD(CReady) {
-    if (IsMatch()) return EndCmd(client, "Ready command can only be used during preround.");
-    if (args != 0) return EndCmd(client, "Usage: sm_ready");
+    if (IsMatch()) END_CMD2(client, "Ready command can only be used during preround.");
+    if (args != 0) END_CMD2(client, "Usage: sm_ready");
     
     // Get client's team
     TFTeam clientTeam = TF2_GetClientTeam(client);
     if (clientTeam != TFTeam_Red && clientTeam != TFTeam_Blue) {
-        return EndCmd(client, "You must be on RED or BLU team to use this command.");
+        END_CMD2(client, "You must be on RED or BLU team to use this command.");
     }
     
     // Convert TF team to array index
@@ -760,22 +754,21 @@ NEW_CMD(CReady) {
 
 // Rename team command
 NEW_CMD(CTeamName) {
-    if (IsMatch()) return EndCmd(client, "Team rename command can only be used during preround.");
-    if (args != 1) return EndCmd(client, "Usage: sm_team_name <new_name>");
+    if (IsMatch()) END_CMD2(client, "Team rename command can only be used during preround.");
+    if (args != 1) END_CMD2(client, "Usage: sm_team_name <new_name>");
     
     // Get client's team
     TFTeam clientTeam = TF2_GetClientTeam(client);
     if (clientTeam != TFTeam_Red && clientTeam != TFTeam_Blue) {
-        return EndCmd(client, "You must be on RED or BLU team to use this command.");
+        END_CMD2(client, "You must be on RED or BLU team to use this command.");
     }
     
     // Get new team name
-    c newName[64];
-    GetCmdArg(1, newName, sizeof(newName));
+    GET_ARG(1, newName, 64);
     
     // Validate name length
-    if (strlen(newName) < 1) return EndCmd(client, "Team name cannot be empty.");
-    if (strlen(newName) > 32) return EndCmd(client, "Team name cannot be longer than 32 characters.");
+    if (strlen(newName) < 1)  END_CMD2(client, "Team name cannot be empty.");
+    if (strlen(newName) > 32) END_CMD2(client, "Team name cannot be longer than 32 characters.");
     
     // Get team entity
     i teamEntity = -1;
@@ -791,18 +784,15 @@ NEW_CMD(CTeamName) {
         }
     }
     
-    if (teamEntity == -1) return EndCmd(client, "Could not find team entity.");
+    if (teamEntity == -1) END_CMD2(client, "Could not find team entity.");
     
     // Set the team name
     SetEntPropString(teamEntity, Prop_Data, "m_szTeamname", newName);
     
     // Get old team name for display
     c oldTeamName[10];
-    if (clientTeam == TFTeam_Red) {
-        STRCP(oldTeamName, "RED");
-    } else {
-        STRCP(oldTeamName, "BLU");
-    }
+    if (clientTeam == TFTeam_Red) STRCP(oldTeamName, "RED");
+    else STRCP(oldTeamName, "BLU");
     
     // Announce to all players
     c playerName[MAX_NAME_LENGTH];
@@ -854,7 +844,7 @@ NEW_CMD(CDebugRoundTime) {
         found++;
     }
 
-    if (found == 0) return EndCmd(client, "No team_round_timer found.");
+    if (found == 0) END_CMD2(client, "No team_round_timer found.");
     PH;
 }
 
@@ -864,43 +854,40 @@ NEW_CMD(CDebugRoundTime) {
 
 // Backup toggle for resupply
 NEW_CMD(CToggleResupply) {
-    if (args != 1) return EndCmd(client, "Usage: sm_enable_resupply <0|1>");
+    if (args != 1) END_CMD2(client, "Usage: sm_enable_resupply <0|1>");
 
-    c arg[4];
-    GetCmdArg(1, arg, sizeof(arg));
+    GET_ARG(1, arg, 4);
     i value = StringToInt(arg);
 
-    if (value != 0 && value != 1) return EndCmd(client, "Usage: sm_enable_resupply <0|1> (0=disable, 1=enable)");
+    if (value != 0 && value != 1) END_CMD2(client, "Usage: sm_enable_resupply <0|1> (0=disable, 1=enable)");
 
     g_bResupplyEnabled = (value != 0);
 
-    return EndCmd(client, "Resupply functionality %s", g_bResupplyEnabled ? "ENABLED" : "DISABLED");
+    END_CMD3(client, "Resupply functionality %s", g_bResupplyEnabled ? "ENABLED" : "DISABLED");
 }
 
 // Backup toggle for instant respawn
 NEW_CMD(CToggleRespawn) {
-    if (args != 1) return EndCmd(client, "Usage: sm_enable_respawn <0|1>");
+    if (args != 1) END_CMD2(client, "Usage: sm_enable_respawn <0|1>");
 
-    c arg[4];
-    GetCmdArg(1, arg, sizeof(arg));
+    GET_ARG(1, arg, 4);
     i value = StringToInt(arg);
 
-    if (value != 0 && value != 1) return EndCmd(client, "Usage: sm_enable_respawn <0|1>");
+    if (value != 0 && value != 1) END_CMD2(client, "Usage: sm_enable_respawn <0|1>");
 
     g_bInstantRespawnEnabled = (value != 0);
 
-    return EndCmd(client, "Instant respawn %s", g_bInstantRespawnEnabled ? "enabled" : "disabled");
+    END_CMD3(client, "Instant respawn %s", g_bInstantRespawnEnabled ? "enabled" : "disabled");
 }
 
 // Backup toggle for immunity and infinite ammo
 NEW_CMD(CToggleImmunity) {
-    if (args != 1) return EndCmd(client, "Usage: sm_enable_immunity <0|1>");
+    if (args != 1) END_CMD2(client, "Usage: sm_enable_immunity <0|1>");
 
-    c arg[4];
-    GetCmdArg(1, arg, sizeof(arg));
+    GET_ARG(1, arg, 4);
     i value = StringToInt(arg);
 
-    if (value != 0 && value != 1) return EndCmd(client, "Usage: sm_enable_immunity <0|1> (0=disable, 1=enable)");
+    if (value != 0 && value != 1) END_CMD2(client, "Usage: sm_enable_immunity <0|1> (0=disable, 1=enable)");
 
     g_bImmunityAmmoEnabled = (value != 0);
 
@@ -918,33 +905,31 @@ NEW_CMD(CToggleImmunity) {
         }
     }
 
-    return EndCmd(client, "Immunity and infinite ammo %s", g_bImmunityAmmoEnabled ? "ENABLED" : "DISABLED");
+    END_CMD3(client, "Immunity and infinite ammo %s", g_bImmunityAmmoEnabled ? "ENABLED" : "DISABLED");
 }
 
 // Backup toggle for save/load
 NEW_CMD(CToggleSave) {
-    if (args != 1) return EndCmd(client, "Usage: sm_enable_saveload <0|1>");
+    if (args != 1) END_CMD2(client, "Usage: sm_enable_saveload <0|1>");
 
-    c arg[4];
-    GetCmdArg(1, arg, sizeof(arg));
+    GET_ARG(1, arg, 4);
     i value = StringToInt(arg);
 
-    if (value != 0 && value != 1) return EndCmd(client, "Usage: sm_enable_saveload <0|1> (0=disable, 1=enable)");
+    if (value != 0 && value != 1) END_CMD2(client, "Usage: sm_enable_saveload <0|1> (0=disable, 1=enable)");
 
     g_bSaveEnabled = (value != 0);
 
-    return EndCmd(client, "Save/Load spawn functionality %s", g_bSaveEnabled ? "ENABLED" : "DISABLED");
+    END_CMD3(client, "Save/Load spawn functionality %s", g_bSaveEnabled ? "ENABLED" : "DISABLED");
 }
 
 // Backup toggle for demo blast vulnerability
 NEW_CMD(CToggleDemoResist) {
-    if (args != 1) return EndCmd(client, "Usage: sm_enable_demoresist <0|1>");
+    if (args != 1) END_CMD2(client, "Usage: sm_enable_demoresist <0|1>");
 
-    c arg[4];
-    GetCmdArg(1, arg, sizeof(arg));
+    GET_ARG(1, arg, 4);
     i value = StringToInt(arg);
 
-    if (value != 0 && value != 1) return EndCmd(client, "Usage: sm_enable_demoresist <0|1>");
+    if (value != 0 && value != 1) END_CMD2(client, "Usage: sm_enable_demoresist <0|1>");
 
     g_bDemoResistEnabled = (value != 0);
 
@@ -955,7 +940,7 @@ NEW_CMD(CToggleDemoResist) {
         }
     }
 
-    return EndCmd(client, "Demo blast vulnerability %s", g_bDemoResistEnabled ? "ENABLED" : "DISABLED");
+    END_CMD3(client, "Demo blast vulnerability %s", g_bDemoResistEnabled ? "ENABLED" : "DISABLED");
 }
 
 // Debug command to list entities with blast attributes
@@ -981,21 +966,18 @@ NEW_CMD(CListBlastAttrib) {
 
 // Add prefix tag to all players on a team
 NEW_CMD(CAddTag) {
-    if (args != 2) return EndCmd(client, "Usage: sm_add_tag <red|blu> <tag>");
+    if (args != 2) END_CMD2(client, "Usage: sm_add_tag <red|blu> <tag>");
     
-    c teamArg[10];
-    c tagArg[8];
-    
-    GetCmdArg(1, teamArg, sizeof(teamArg));
-    GetCmdArg(2, tagArg, sizeof(tagArg));
+    GET_ARG(1, teamArg, 10);
+    GET_ARG(2, tagArg, 8);
     
     // Validate team
     i teamIndex = ParseTeamIndex(teamArg);
-    if (teamIndex == -1) return EndCmd(client, "Invalid team. Use 'red|r' or 'blu|blue|b'.");
+    if (teamIndex == -1) END_CMD2(client, "Invalid team. Use 'red|r' or 'blu|blue|b'.");
     
     // Validate tag length (max 7 characters)
-    if (strlen(tagArg) < 1) return EndCmd(client, "Tag cannot be empty.");
-    if (strlen(tagArg) > 7) return EndCmd(client, "Tag cannot be longer than 7 characters.");
+    if (strlen(tagArg) < 1) END_CMD2(client, "Tag cannot be empty.");
+    if (strlen(tagArg) > 7) END_CMD2(client, "Tag cannot be longer than 7 characters.");
     
     // Apply tag to all players on the team
     i playersTagged = 0;
@@ -1036,11 +1018,8 @@ NEW_CMD(CAddTag) {
     
     // Report results
     c teamName[10];
-    if (teamIndex == RED) {
-        STRCP(teamName, "RED");
-    } else {
-        STRCP(teamName, "BLU");
-    }
+    if (teamIndex == RED) STRCP(teamName, "RED");
+    else STRCP(teamName, "BLU");
     
     if (playersTagged > 0) {
         c adminName[MAX_NAME_LENGTH];
@@ -1056,21 +1035,18 @@ NEW_CMD(CAddTag) {
 
 // Remove prefix tag from all players on a team
 NEW_CMD(CRemoveTag) {
-    if (args != 2) return EndCmd(client, "Usage: sm_remove_tag <red|blu> <tag>");
+    if (args != 2) END_CMD2(client, "Usage: sm_remove_tag <red|blu> <tag>");
     
-    c teamArg[10];
-    c tagArg[8];
-    
-    GetCmdArg(1, teamArg, sizeof(teamArg));
-    GetCmdArg(2, tagArg, sizeof(tagArg));
+    GET_ARG(1, teamArg, 10);
+    GET_ARG(2, tagArg, 8);
     
     // Validate team
     i teamIndex = ParseTeamIndex(teamArg);
-    if (teamIndex == -1) return EndCmd(client, "Invalid team. Use 'red|r' or 'blu|blue|b'.");
+    if (teamIndex == -1) END_CMD2(client, "Invalid team. Use 'red|r' or 'blu|blue|b'.");
     
     // Validate tag length
-    if (strlen(tagArg) < 1) return EndCmd(client, "Tag cannot be empty.");
-    if (strlen(tagArg) > 7) return EndCmd(client, "Tag cannot be longer than 7 characters.");
+    if (strlen(tagArg) < 1) END_CMD2(client, "Tag cannot be empty.");
+    if (strlen(tagArg) > 7) END_CMD2(client, "Tag cannot be longer than 7 characters.");
     
     // Remove tag from all players on the team
     i playersUntagged = 0;
@@ -1106,11 +1082,8 @@ NEW_CMD(CRemoveTag) {
     
     // Report results
     c teamName[10];
-    if (teamIndex == RED) {
-        STRCP(teamName, "RED");
-    } else {
-        STRCP(teamName, "BLU");
-    }
+    if (teamIndex == RED) STRCP(teamName, "RED");
+    else STRCP(teamName, "BLU");
     
     if (playersUntagged > 0) {
         c adminName[MAX_NAME_LENGTH];
@@ -1178,7 +1151,7 @@ NEW_EV(EPSpawn) {
         GetAmmoCookie( client );
         GetImmunityCookie( client );
         return;
-    } else if ( !g_bBackupFOVDB ) {
+    } elif ( !g_bBackupFOVDB ) {
         // Steam is down, initialize backup system
         SetBackupSystem( true );
         g_bSteamOnline = false;
@@ -1214,7 +1187,7 @@ pub OnFOVQueried( QueryCookie cookie, i client, ConVarQueryResult result, const 
 // ====================================================================================================
 
 // Sends a message to the client and returns PH
-Act EndCmd( i client, const c[] format, any... ) {
+Act EndCommand( i client, const c[] format, any... ) {
     c buffer[ 254 ];
     VFormat( buffer, sizeof( buffer ), format, 3 );
     Reply( client, "%s", buffer );
@@ -1296,12 +1269,12 @@ pub v RespawnFrame( any client ) {
 }
 
 // Command for when resupply key is pressed
-NEW_CMD(CResupplyDn) {
+NEW_CMD(CResupDn) {
     // Check if resupply is globally enabled
-    if (!g_bResupplyEnabled) return EndCmd(client, "Resupply is disabled.");
+    if (!g_bResupplyEnabled) END_CMD2(client, "Resupply is disabled.");
 
     // Check if client is valid
-    if (!IsClientInGame(client)) return EndCmd(client, "You must be in-game to use this command.");
+    if (!IsClientInGame(client)) END_CMD2(client, "You must be in-game to use this command.");
 
     // Mark the key as down and reset used flag
     g_bResupplyDn[client] = true;
@@ -1314,7 +1287,7 @@ NEW_CMD(CResupplyDn) {
 }
 
 // Command for when resupply key is released
-NEW_CMD(CResupplyUp) {
+NEW_CMD(CResupUp) {
     // Check if client is valid
     if (!IsClientInGame(client)) PH;
 
@@ -1735,7 +1708,7 @@ v BuildEntityCache() {
             i team = GetEntProp(entity, Prop_Send, "m_iTeamNum");
             if (team == 2) { // RED
                 g_hCachedSpawnPoints[RED].Push(entity);
-            } else if (team == 3) { // BLU
+            } elif (team == 3) { // BLU
                 g_hCachedSpawnPoints[BLU].Push(entity);
             }
         }
