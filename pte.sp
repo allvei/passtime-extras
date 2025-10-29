@@ -51,16 +51,16 @@
 #define GENERIC        ADMFLAG_GENERIC
 #define FindEntByClass FindEntityByClassname
 
-#define GET_ARG(%1, %2, %3) c %2[%3]; GetCmdArg(%1, %2, %3)
-#define NEW_CMD(%1)         Pac %1( i client, i args )
-#define NEW_EV_ACT(%1)      Pac %1( Ev event, const c[] name, b dontBroadcast )
-#define NEW_EV(%1)          pub %1( Ev event, const c[] name, b dontBroadcast )
-#define STRCP(%1,%2)        strcopy(%1, sizeof(%1), %2)
-#define FOR_EACH_CLIENT(%1) for ( i %1 = 1; %1 <= MaxClients; %1++ )
-#define FOR_EACH_ENT(%1)    for ( i %1 = 1; %1 <= EDICT; %1++ )
-#define END_CMD(%1)         return EndCommand(client, %1)
-#define END_CMD2(%1, %2)        return EndCommand(%1, %2)
-#define END_CMD3(%1, %2, %3)    return EndCommand(%1, %2, %3)
+#define GET_ARG(%1, %2, %3) char %2[%3]; GetCmdArg(%1, %2, %3)
+#define NEW_CMD(%1)              Pac %1( i client, i args )
+#define NEW_EV_ACT(%1)           Pac %1( Ev event, const c[] name, b dontBroadcast )
+#define NEW_EV(%1)               pub %1( Ev event, const c[] name, b dontBroadcast )
+#define STRCP(%1,%2)             strcopy(%1, sizeof(%1), %2)
+#define FOR_EACH_CLIENT(%1)      for ( i %1 = 1; %1 <= MaxClients; %1++ )
+#define FOR_EACH_ENT(%1)         for ( i %1 = 1; %1 <= EDICT; %1++ )
+#define END_CMD(%1) return EndCommand(client, %1)
+#define END_CMD2(%1, %2)         return EndCommand(%1, %2)
+#define END_CMD3(%1, %2, %3)     return EndCommand(%1, %2, %3)
 #define END_CMD4(%1, %2, %3, %4) return EndCommand(%1, %2, %3, %4)
 
 public Plugin myinfo = {
@@ -161,7 +161,7 @@ pub OnPluginStart() {
     CCS( "sm_save",              "sm_sv",   CSaveSpawn,        "Save a spawn point" );
     CCS( "sm_load",              "sm_ld",   CLoadSpawn,        "Teleport to saved spawn" );
     CCS( "sm_immune",            "sm_i",    CImmune,           "Toggle immunity" );
-    CCS( "sm_ammo",              "sm_a",    CInfAmmo,         "Toggle infinite ammo" );
+    CCS( "sm_ammo",              "sm_a",    CInfAmmo,          "Toggle infinite ammo" );
     CCS( "sm_diceroll",          "sm_dice", CDice,             "Select a random player from targets" );
     CCS( "sm_ready",             "sm_r",    CReady,            "Toggle your team's ready state" );
     CCS( "sm_team_name",         "sm_tn",   CTeamName,         "Rename your team" );
@@ -343,13 +343,14 @@ b IsMatch() {
 NEW_CMD(CForceReady) {
     if (IsMatch()) PCO;
 
-    if ( args != 2 ) END_CMD( "Usage: sm_force_ready <red|blu> <0|1>" );
+    if ( args != 2 ) {
+        END_CMD( "Usage: sm_force_ready <red|blu> <0|1>" );
+    }
 
     GET_ARG(1, teamArg, 10);
-    GET_ARG(2, statusArg, 2);
 
     i teamIndex = ParseTeamIndex( teamArg );
-    i status    = StringToInt( statusArg );
+    i status    = GetCmdArgInt( 2 );
 
     // Validate input
     if ( teamIndex == -1 ) END_CMD( "Invalid team. Use 'red' or 'blu'." );
@@ -650,7 +651,7 @@ NEW_CMD(CDice) {
     // Process parsed arguments
     for (i argIndex = 0; argIndex < argCount; argIndex++) {
         c arg[64];
-        strcopy(arg, sizeof(arg), arguments[argIndex]);
+        STRCP(arg, arguments[argIndex]);
         
         // Check if it looks like a number (custom string)
         b isNumeric = true;
@@ -667,6 +668,7 @@ NEW_CMD(CDice) {
             customCount++;
         } else {
             // Try to process as player target
+            TargetStringAlias(arg, sizeof(arg));
             i targets[MAXPLAYERS];
             c target_name[MAX_TARGET_LENGTH];
             b tn_is_ml = false;
@@ -1067,11 +1069,11 @@ NEW_CMD(CRemoveTag) {
         if (StrContains(currentName, tagWithSpace, false) == 0) {
             // Remove the tag prefix (tag + space)
             c newName[MAX_NAME_LENGTH];
-            strcopy(newName, sizeof(newName), currentName[strlen(tagWithSpace)]);
+            STRCP(newName, currentName[strlen(tagWithSpace)]);
             
             // Ensure we don't end up with an empty name
             if (strlen(newName) < 1) {
-                strcopy(newName, sizeof(newName), "Player");
+                STRCP(newName, "Player");
             }
             
             // Set the new name
@@ -1245,6 +1247,13 @@ i ParseTeamIndex( c[] team ) {
                                                                                         : -1;
 }
 
+// Replaces @r, @blu, @b, @s, @spectator with @red, @blue, @spec
+v TargetStringAlias( c[] target, i size ) {
+    if   ( StrEqual( target, "@r",   false ) )                                             strcopy( target, size, "@red" );
+    elif ( StrEqual( target, "@blu", false ) || StrEqual( target, "@b",         false ) )  strcopy( target, size, "@blue" );
+    elif ( StrEqual( target, "@s",   false ) || StrEqual( target, "@spectator", false ) )  strcopy( target, size, "@spec" );
+}
+
 // Enable or disable the backup system based on Steam connection status
 SetBackupSystem( b a ) {
     if ( g_bBackupFOVDB == a ) return; // Already in desired state
@@ -1395,8 +1404,6 @@ b IsTooFarFromSpawnpoint(i client) {
     else {
         c name[MAX_NAME_LENGTH];
         GetClientName(client, name, sizeof(name));
-        PrintToChatAll("Resupply blocked out of spawn! %s was %.1f units from spawn (max: %.1f)", 
-                       name, nearestDistance, RESUPDIST);
         return true;
     }
 }
