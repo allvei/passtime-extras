@@ -1,4 +1,5 @@
 // Imports
+#include <morecolors>
 #include <clientprefs>
 #include <clients>
 #include <sdkhooks>
