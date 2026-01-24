@@ -23,7 +23,7 @@
 #define MAXSLOTS    2
 #define RESUPDIST   512.0 // Max dist from spawn resupply can be used
 
-// MACROS
+// Simple
 #define PCH   return Plugin_Changed
 #define PCO   return Plugin_Continue
 #define PH    return Plugin_Handled
@@ -51,17 +51,19 @@
 #define GENERIC        ADMFLAG_GENERIC
 #define FindEntByClass FindEntityByClassname
 
-#define GET_ARG(%1, %2, %3) c %2[%3]; GetCmdArg(%1, %2, %3)
-#define NEW_CMD(%1)         Pac %1( i client, i args )
-#define NEW_EV_ACT(%1)      Pac %1( Ev event, const c[] name, b dontBroadcast )
-#define NEW_EV(%1)          pub %1( Ev event, const c[] name, b dontBroadcast )
-#define STRCP(%1,%2)        strcopy(%1, sizeof(%1), %2)
-#define FOR_EACH_CLIENT(%1) for ( i %1 = 1; %1 <= MaxClients; %1++ )
-#define FOR_EACH_ENT(%1)    for ( i %1 = 1; %1 <= EDICT; %1++ )
-#define END_CMD(%1)         return EndCommand(client, %1)
-#define END_CMD2(%1, %2)        return EndCommand(%1, %2)
-#define END_CMD3(%1, %2, %3)    return EndCommand(%1, %2, %3)
-#define END_CMD4(%1, %2, %3, %4) return EndCommand(%1, %2, %3, %4)
+
+// Complex macros
+#define GET_ARG(%1,%2,%3)      c %2[%3]; GetCmdArg(%1,%2,%3)
+#define NEW_CMD(%1)            Pac %1( i client, i args )
+#define NEW_EV_ACT(%1)         Pac %1( Ev event, const c[] name, b dontBroadcast )
+#define NEW_EV(%1)             pub %1( Ev event, const c[] name, b dontBroadcast )
+#define STRCP(%1,%2)           strcopy(%1, sizeof(%1), %2)
+#define FOR_EACH_CLIENT(%1)    for ( i %1 = 1; %1 <= MaxClients; %1++ )
+#define FOR_EACH_ENT(%1)       for ( i %1 = 1; %1 <= EDICT; %1++ )
+#define END_CMD(%1)            return EndCommand(client,%1)
+#define END_CMD2(%1,%2)        return EndCommand(%1,%2)
+#define END_CMD3(%1,%2,%3)     return EndCommand(%1,%2,%3)
+#define END_CMD4(%1,%2,%3,%4)  return EndCommand(%1,%2,%3,%4)
 
 public Plugin myinfo = {
     name        = "passtime.tf extras",
@@ -717,7 +719,7 @@ NEW_CMD(CDice) {
 
 // Toggle ready state for the user's team
 NEW_CMD(CReady) {
-    if (IsMatch()) END_CMD2(client, "Ready command can only be used during preround.");
+    if (IsMatch()) END_CMD2(client, "Ready command can not be used during a game.");
     if (args != 0) END_CMD2(client, "Usage: sm_ready");
     
     // Get client's team
