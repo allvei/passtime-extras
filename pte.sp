@@ -29,7 +29,9 @@
 #define PCO   return Plugin_Continue
 #define PH    return Plugin_Handled
 #define pub   public
+#define len   sizeof
 #define as    view_as
+#define CV    ConVar
 #define Act   Action
 #define Han   Handle
 #define Ev    Event
@@ -52,13 +54,12 @@
 #define GENERIC        ADMFLAG_GENERIC
 #define FindEntByClass FindEntityByClassname
 
-
 // Complex macros
 #define GET_ARG(%1,%2,%3)      c %2[%3]; GetCmdArg(%1,%2,%3)
 #define NEW_CMD(%1)            Pac %1( i client, i args )
 #define NEW_EV_ACT(%1)         Pac %1( Ev event, const c[] name, b dontBroadcast )
 #define NEW_EV(%1)             pub %1( Ev event, const c[] name, b dontBroadcast )
-#define STRCP(%1,%2)           strcopy(%1, sizeof(%1), %2)
+#define STRCP(%1,%2)           strcopy(%1, len(%1), %2)
 #define FOR_EACH_CLIENT(%1)    for ( i %1 = 1; %1 <= MaxClients; %1++ )
 #define FOR_EACH_ENT(%1)       for ( i %1 = 1; %1 <= EDICT; %1++ )
 #define END_CMD(%1)            return EndCommand(client,%1)
@@ -80,8 +81,8 @@ Han g_hCookieInfiniteAmmo;
 Han g_hCookieImmunity;
 
 // ConVars
-ConVar g_cvFOVMin;
-ConVar g_cvFOVMax;
+CV g_cvFOVMin;
+CV g_cvFOVMax;
 
 // Backup system for FOV tracking when Steam connection is down
 b g_bSteamOnline = true;          // Track if Steam is currently connected
@@ -109,7 +110,7 @@ b g_bInfiniteAmmo[MAXPLAYERS];
 ArrayList g_hOriginalAmmo[MAXPLAYERS]; // Dynamic arrays for players who actually use infinite ammo
 
 // Respawn time control
-ConVar g_cvRespawnTime;
+CV g_cvRespawnTime;
 b      g_bIsTeamReady[2] = { false, false }; // Track ready state for RED and BLU
 
 // Saved spawn point (admin tools)
@@ -381,7 +382,7 @@ NEW_CMD(CSetTeam) {
     i target_list[ MAXPLAYERS ];
     c target_name[ MAX_TARGET_LENGTH ];
     b tn_is_ml     = false;
-    i target_count = ProcessTargetString( target, client, target_list, MAXPLAYERS, COMMAND_FILTER_CONNECTED, target_name, sizeof( target_name ), tn_is_ml );
+    i target_count = ProcessTargetString( target, client, target_list, MAXPLAYERS, COMMAND_FILTER_CONNECTED, target_name, len( target_name ), tn_is_ml );
     b check        = false;
 
     if ( target_count == COMMAND_TARGET_NONE ) PH;
@@ -402,7 +403,7 @@ NEW_CMD(CSetTeam) {
         }
 
         c team_name[ 5 ];
-        GetTeamName( as<i>( team ), team_name, sizeof( team_name ) );
+        GetTeamName( as<i>( team ), team_name, len( team_name ) );
 
         Reply( client, "Switched %s to %s", target_name, team_name );
     }
@@ -429,7 +430,7 @@ NEW_CMD(CSetFOV) {
     b cookieSuccess = false;
     if ( AreClientCookiesCached( client ) ) {
         c cookie[ 4 ];
-        IntToString( fov, cookie, sizeof( cookie ) );
+        IntToString( fov, cookie, len( cookie ) );
         SetClientCookie( client, g_hCookieFOV, cookie );
         cookieSuccess     = true;
         g_bSteamOnline = true; // Steam is connected if cookies work
@@ -555,7 +556,7 @@ NEW_CMD(CSetClass) {
     i targets[ MAXPLAYERS ];
     c target_name[ MAX_TARGET_LENGTH ];
     b tn_is_ml = false;
-    i count    = ProcessTargetString( targetArg, client, targets, MAXPLAYERS, COMMAND_FILTER_CONNECTED, target_name, sizeof( target_name ), tn_is_ml );
+    i count    = ProcessTargetString( targetArg, client, targets, MAXPLAYERS, COMMAND_FILTER_CONNECTED, target_name, len( target_name ), tn_is_ml );
     b changed  = false;
     if ( count == COMMAND_TARGET_NONE ) PH;
 
@@ -598,21 +599,21 @@ NEW_CMD(CDice) {
     
     // Get the full command string to handle quoted arguments properly
     c fullCmd[256];
-    GetCmdArgString(fullCmd, sizeof(fullCmd));
+    GetCmdArgString(fullCmd, len(fullCmd));
     
     // Parse arguments manually to handle quotes correctly
     c arguments[10][64];
     i argCount = 0;
     i pos = 0;
-    i len = strlen(fullCmd);
+    i length = strlen(fullCmd);
     
-    while (pos < len && argCount < 10) {
+    while (pos < length && argCount < 10) {
         // Skip leading spaces
-        while (pos < len && (fullCmd[pos] == ' ' || fullCmd[pos] == '\t')) {
+        while (pos < length && (fullCmd[pos] == ' ' || fullCmd[pos] == '\t')) {
             pos++;
         }
         
-        if (pos >= len) break;
+        if (pos >= length) break;
         
         i argStart = pos;
         i argLen = 0;
@@ -622,27 +623,27 @@ NEW_CMD(CDice) {
             pos++; // Skip opening quote
             argStart = pos;
             
-            while (pos < len && fullCmd[pos] != '"') {
+            while (pos < length && fullCmd[pos] != '"') {
                 pos++;
             }
             
-            if (pos < len) {
+            if (pos < length) {
                 argLen = pos - argStart;
                 pos++; // Skip closing quote
             } else {
-                argLen = len - argStart;
+                argLen = length - argStart;
             }
         } else {
             // Unquoted argument - read until space
-            while (pos < len && fullCmd[pos] != ' ' && fullCmd[pos] != '\t') {
+            while (pos < length && fullCmd[pos] != ' ' && fullCmd[pos] != '\t') {
                 pos++;
             }
             argLen = pos - argStart;
         }
         
         // Copy argument
-        if (argLen > 0 && argLen < sizeof(arguments[])) {
-            for (i copyIdx = 0; copyIdx < argLen && copyIdx < sizeof(arguments[]) - 1; copyIdx++) {
+        if (argLen > 0 && argLen < len(arguments[])) {
+            for (i copyIdx = 0; copyIdx < argLen && copyIdx < len(arguments[]) - 1; copyIdx++) {
                 arguments[argCount][copyIdx] = fullCmd[argStart + copyIdx];
             }
             arguments[argCount][argLen] = '\0';
@@ -653,7 +654,7 @@ NEW_CMD(CDice) {
     // Process parsed arguments
     for (i argIndex = 0; argIndex < argCount; argIndex++) {
         c arg[64];
-        strcopy(arg, sizeof(arg), arguments[argIndex]);
+        strcopy(arg, len(arg), arguments[argIndex]);
         
         // Check if it looks like a number (custom string)
         b isNumeric = true;
@@ -666,14 +667,14 @@ NEW_CMD(CDice) {
         
         if (isNumeric || strlen(arg) <= 3) {
             // Treat as custom string
-            strcopy(customStrings[customCount], sizeof(customStrings[]), arg);
+            strcopy(customStrings[customCount], len(customStrings[]), arg);
             customCount++;
         } else {
             // Try to process as player target
             i targets[MAXPLAYERS];
             c target_name[MAX_TARGET_LENGTH];
             b tn_is_ml = false;
-            i target_count = ProcessTargetString(arg, client, targets, MAXPLAYERS, COMMAND_FILTER_CONNECTED, target_name, sizeof(target_name), tn_is_ml);
+            i target_count = ProcessTargetString(arg, client, targets, MAXPLAYERS, COMMAND_FILTER_CONNECTED, target_name, len(target_name), tn_is_ml);
             
             // Add found targets to our combined list (avoid duplicates)
             for (i n = 0; n < target_count && totalTargetCount < MAXPLAYERS; n++) {
@@ -704,7 +705,7 @@ NEW_CMD(CDice) {
         i selected_player = allTargets[random_index];
         
         c selected_name[MAX_NAME_LENGTH];
-        GetClientName(selected_player, selected_name, sizeof(selected_name));
+        GetClientName(selected_player, selected_name, len(selected_name));
         PrintToChatAll("%s was rolled!", selected_name);
     } elif (customCount > 0) {
         // Mixed case - select from custom strings
@@ -749,7 +750,7 @@ NEW_CMD(CReady) {
     
     // Announce to all players
     c playerName[MAX_NAME_LENGTH];
-    GetClientName(client, playerName, sizeof(playerName));
+    GetClientName(client, playerName, len(playerName));
     PrintToChatAll("%s set team %s to %s", playerName, teamName, g_bIsTeamReady[teamIndex] ? "READY" : "NOT READY");
     
     PH;
@@ -799,7 +800,7 @@ NEW_CMD(CTeamName) {
     
     // Announce to all players
     c playerName[MAX_NAME_LENGTH];
-    GetClientName(client, playerName, sizeof(playerName));
+    GetClientName(client, playerName, len(playerName));
     PrintToChatAll("%s renamed team %s to \"%s\"", playerName, oldTeamName, newName);
     
     PH;
@@ -952,7 +953,7 @@ NEW_CMD(CListBlastAttrib) {
     FOR_EACH_CLIENT( n ) {
         if (IsClientInGame(n) && g_bDemoResistApplied[n]) {
             c name[MAX_NAME_LENGTH];
-            GetClientName(n, name, sizeof(name));
+            GetClientName(n, name, len(name));
             Reply(client, "Player %s (ID: %d) has blast resistance value: %.2f", name, n, g_fCurrentDemoResistValue[n]);
             count++;
         }
@@ -992,14 +993,14 @@ NEW_CMD(CAddTag) {
         
         // Get current name
         c currentName[MAX_NAME_LENGTH];
-        GetClientName(n, currentName, sizeof(currentName));
+        GetClientName(n, currentName, len(currentName));
         
         // Check if name already has this tag
         if (StrContains(currentName, tagArg, false) == 0) continue; // Skip if already has tag at start
         
         // Create new name with tag prefix
         c newName[MAX_NAME_LENGTH];
-        Format(newName, sizeof(newName), "%s %s", tagArg, currentName);
+        Format(newName, len(newName), "%s %s", tagArg, currentName);
         
         // Ensure new name doesn't exceed max length
         if (strlen(newName) > MAX_NAME_LENGTH - 1) {
@@ -1008,7 +1009,7 @@ NEW_CMD(CAddTag) {
             if (maxOriginalLength > 0) {
                 c truncatedName[MAX_NAME_LENGTH];
                 strcopy(truncatedName, maxOriginalLength + 1, currentName);
-                Format(newName, sizeof(newName), "%s %s", tagArg, truncatedName);
+                Format(newName, len(newName), "%s %s", tagArg, truncatedName);
             } else {
                 continue; // Skip if tag is too long
             }
@@ -1026,7 +1027,7 @@ NEW_CMD(CAddTag) {
     
     if (playersTagged > 0) {
         c adminName[MAX_NAME_LENGTH];
-        GetClientName(client, adminName, sizeof(adminName));
+        GetClientName(client, adminName, len(adminName));
         PrintToChatAll("Admin %s added tag \"%s\" to %d players on team %s", adminName, tagArg, playersTagged, teamName);
         Reply(client, "Successfully added tag \"%s\" to %d players on team %s", tagArg, playersTagged, teamName);
     } else {
@@ -1061,20 +1062,20 @@ NEW_CMD(CRemoveTag) {
         
         // Get current name
         c currentName[MAX_NAME_LENGTH];
-        GetClientName(n, currentName, sizeof(currentName));
+        GetClientName(n, currentName, len(currentName));
         
         // Check if name starts with the tag followed by a space
         c tagWithSpace[10];
-        Format(tagWithSpace, sizeof(tagWithSpace), "%s ", tagArg);
+        Format(tagWithSpace, len(tagWithSpace), "%s ", tagArg);
         
         if (StrContains(currentName, tagWithSpace, false) == 0) {
             // Remove the tag prefix (tag + space)
             c newName[MAX_NAME_LENGTH];
-            strcopy(newName, sizeof(newName), currentName[strlen(tagWithSpace)]);
+            strcopy(newName, len(newName), currentName[strlen(tagWithSpace)]);
             
             // Ensure we don't end up with an empty name
             if (strlen(newName) < 1) {
-                strcopy(newName, sizeof(newName), "Player");
+                strcopy(newName, len(newName), "Player");
             }
             
             // Set the new name
@@ -1090,7 +1091,7 @@ NEW_CMD(CRemoveTag) {
     
     if (playersUntagged > 0) {
         c adminName[MAX_NAME_LENGTH];
-        GetClientName(client, adminName, sizeof(adminName));
+        GetClientName(client, adminName, len(adminName));
         PrintToChatAll("Admin %s removed tag \"%s\" from %d players on team %s", adminName, tagArg, playersUntagged, teamName);
         Reply(client, "Successfully removed tag \"%s\" from %d players on team %s", tagArg, playersUntagged, teamName);
     } else {
@@ -1192,7 +1193,7 @@ pub OnFOVQueried( QueryCookie cookie, i client, ConVarQueryResult result, const 
 // Sends a message to the client and returns PH
 Act EndCommand( i client, const c[] format, any... ) {
     c buffer[ 254 ];
-    VFormat( buffer, sizeof( buffer ), format, 3 );
+    VFormat( buffer, len( buffer ), format, 3 );
     Reply( client, "%s", buffer );
     PH;
 }
@@ -1202,7 +1203,7 @@ b IsValidClient( i client ) {
     return IsClientInGame( client ) && !IsFakeClient( client ) && IsClientConnected( client );
 }
 
-// Checks if a client in-game, connected, not fake, and in a valid team
+// Checks if a client in-game, connected, not fake, in a valid team, and alive
 b IsValidClientAlive( i client ) {
     return IsValidClient( client ) && IsPlayerAlive( client );
 }
@@ -1216,7 +1217,7 @@ SetFOV( i client, i fov ) {
 // Retrieves the client's FOV from the cookie and applies it, returns false if invalid
 b GetFOVCookie( i client ) {
     c cookie[ 4 ];
-    GetClientCookie( client, g_hCookieFOV, cookie, sizeof( cookie ) );
+    GetClientCookie( client, g_hCookieFOV, cookie, len( cookie ) );
     i fov = StringToInt( cookie ),
       min = GetConVarInt( g_cvFOVMin ),
       max = GetConVarInt( g_cvFOVMax );
@@ -1397,7 +1398,7 @@ b IsTooFarFromSpawnpoint(i client) {
     if (nearestDistance < RESUPDIST) return false;
     else {
         c name[MAX_NAME_LENGTH];
-        GetClientName(client, name, sizeof(name));
+        GetClientName(client, name, len(name));
         return true;
     }
 }
@@ -1489,7 +1490,7 @@ pub v OnClientCookiesCached( i client ) {
 v SetAmmoCookie(i client, b enabled) {
     if (AreClientCookiesCached(client)) {
         c cookie[2];
-        IntToString(enabled ? 1 : 0, cookie, sizeof(cookie));
+        IntToString(enabled ? 1 : 0, cookie, len(cookie));
         SetClientCookie(client, g_hCookieInfiniteAmmo, cookie);
         g_bSteamOnline = true;
         
@@ -1507,7 +1508,7 @@ v SetAmmoCookie(i client, b enabled) {
 }
 b GetAmmoCookie(i client) {
     c cookie[2];
-    GetClientCookie(client, g_hCookieInfiniteAmmo, cookie, sizeof(cookie));
+    GetClientCookie(client, g_hCookieInfiniteAmmo, cookie, len(cookie));
 
     if (strlen(cookie) == 0) return false;
 
@@ -1532,7 +1533,7 @@ b GetAmmoCookie(i client) {
 v SetImmunityCookie(i client, b enabled) {
     if (AreClientCookiesCached(client)) {
         c cookie[2];
-        IntToString(enabled ? 1 : 0, cookie, sizeof(cookie));
+        IntToString(enabled ? 1 : 0, cookie, len(cookie));
         SetClientCookie(client, g_hCookieImmunity, cookie);
         g_bSteamOnline = true;
         
@@ -1550,7 +1551,7 @@ v SetImmunityCookie(i client, b enabled) {
 }
 b GetImmunityCookie(i client) {
     c cookie[2];
-    GetClientCookie(client, g_hCookieImmunity, cookie, sizeof(cookie));
+    GetClientCookie(client, g_hCookieImmunity, cookie, len(cookie));
 
     if (strlen(cookie) == 0) { return false; }
 
@@ -1788,6 +1789,11 @@ v ApplyDemoResistance(i client) {
             g_bDemoResistApplied[client] = false;
         }
     }
+}
+
+v ApplyAttribute(i client, c[] attribute, f value) {
+    if (!IsValidClient(client)) return;
+    TF2Attrib_SetByName(client, attribute, value);
 }
 
 pub v OnMapStart() {
