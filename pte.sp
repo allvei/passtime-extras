@@ -1398,8 +1398,6 @@ b IsTooFarFromSpawnpoint(i client) {
     else {
         c name[MAX_NAME_LENGTH];
         GetClientName(client, name, sizeof(name));
-        PrintToChatAll("Resupply blocked out of spawn! %s was %.1f units from spawn (max: %.1f)", 
-                       name, nearestDistance, RESUPDIST);
         return true;
     }
 }
