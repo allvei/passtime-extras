@@ -145,6 +145,10 @@ i g_iSavedAmmoType[ MAXSLOTS][2];
 i g_iSavedAmmoCount[MAXSLOTS][2];
 
 pub OnPluginStart() {
+    CAddColor("steamlightgreen", 0x9DC250);
+    CAddColor("team_red",        0xFF4242);
+    CAddColor("team_blue",       0x99CCFF);
+
     // Admin commands
     ACS( "sm_force_ready",       "sm_fr",   CForceReady,       GENERIC, "Set a team's ready status" );
     ACS( "sm_debug_roundtime",   "sm_drt",  CDebugRoundTime,   GENERIC, "Debug: print team_round_timer info" );
@@ -162,18 +166,18 @@ pub OnPluginStart() {
     ACS( "sm_setclass",          "sm_sc",   CSetClass,         GENERIC, "Set a client's class" );
 
     // Console commands
-    CCS( "sm_save",              "sm_sv",   CSaveSpawn,        "Save a spawn point" );
-    CCS( "sm_load",              "sm_ld",   CLoadSpawn,        "Teleport to saved spawn" );
-    CCS( "sm_immune",            "sm_i",    CImmune,           "Toggle immunity" );
-    CCS( "sm_ammo",              "sm_a",    CInfAmmo,         "Toggle infinite ammo" );
-    CCS( "sm_diceroll",          "sm_dice", CDice,             "Select a random player from targets" );
-    CCS( "sm_ready",             "sm_r",    CReady,            "Toggle your team's ready state" );
-    CCS( "sm_team_name",         "sm_tn",   CTeamName,         "Rename your team" );
-    CC(  "sm_fov",                          CSetFOV,           "Set your field of view." );
-    CC(  "+sm_resupply",                    CResupDn,          "Resupply inside spawn" );
-    CC(  "-sm_resupply",                    CResupUp,          "Resupply inside spawn" );
-    CC(  "+sm_pt_resupply",                 CResupDn,          "Resupply inside spawn" );
-    CC(  "-sm_pt_resupply",                 CResupUp,          "Resupply inside spawn" );
+    CCS( "sm_save",         "sm_sv",   CSaveSpawn, "Save a spawn point" );
+    CCS( "sm_load",         "sm_ld",   CLoadSpawn, "Teleport to saved spawn" );
+    CCS( "sm_immune",       "sm_i",    CImmune,    "Toggle immunity" );
+    CCS( "sm_ammo",         "sm_a",    CInfAmmo,   "Toggle infinite ammo" );
+    CCS( "sm_diceroll",     "sm_dice", CDice,      "Select a random player from targets" );
+    CCS( "sm_ready",        "sm_r",    CReady,     "Toggle your team's ready state" );
+    CCS( "sm_team_name",    "sm_tn",   CTeamName,  "Rename your team" );
+    CC(  "sm_fov",                     CSetFOV,    "Set your field of view." );
+    CC(  "+sm_resupply",               CResupDn,   "Resupply inside spawn" );
+    CC(  "-sm_resupply",               CResupUp,   "Resupply inside spawn" );
+    CC(  "+sm_pt_resupply",            CResupDn,   "Resupply inside spawn" );
+    CC(  "-sm_pt_resupply",            CResupUp,   "Resupply inside spawn" );
 
     g_hCookieFOV          = RegClientCookie( "sm_fov_cookie",          "Desired client field of view", CookieAccess_Private );
     g_hCookieInfiniteAmmo = RegClientCookie( "sm_infiniteammo_cookie", "Infinite ammo setting",        CookieAccess_Private );
@@ -729,6 +733,12 @@ NEW_CMD(CReady) {
     if (clientTeam != TFTeam_Red && clientTeam != TFTeam_Blue) {
         END_CMD2(client, "You must be on RED or BLU team to use this command.");
     }
+    c teamColorString[10];
+    if (clientTeam == TFTeam_Red) {
+        STRCP(teamColorString, "{team_red}");
+    } else {
+        STRCP(teamColorString, "{team_blue}");
+    }
     
     // Convert TF team to array index
     i teamIndex = (clientTeam == TFTeam_Red) ? RED : BLU;
@@ -751,8 +761,8 @@ NEW_CMD(CReady) {
     // Announce to all players
     c playerName[MAX_NAME_LENGTH];
     GetClientName(client, playerName, len(playerName));
-    PrintToChatAll("%s set team %s to %s", playerName, teamName, g_bIsTeamReady[teamIndex] ? "READY" : "NOT READY");
-    
+    PrintToChatAll("%s%s {default}changed team state to {steamlightgreen}%s", teamColorString, playerName, g_bIsTeamReady[teamIndex] ? "Ready" : "Not Ready");
+
     PH;
 }
 
@@ -765,6 +775,12 @@ NEW_CMD(CTeamName) {
     TFTeam clientTeam = TF2_GetClientTeam(client);
     if (clientTeam != TFTeam_Red && clientTeam != TFTeam_Blue) {
         END_CMD2(client, "You must be on RED or BLU team to use this command.");
+    }
+    c teamColorString[10];
+    if (clientTeam == TFTeam_Red) {
+        STRCP(teamColorString, "{team_red}");
+    } else {
+        STRCP(teamColorString, "{team_blue}");
     }
     
     // Get new team name
@@ -801,7 +817,7 @@ NEW_CMD(CTeamName) {
     // Announce to all players
     c playerName[MAX_NAME_LENGTH];
     GetClientName(client, playerName, len(playerName));
-    PrintToChatAll("%s renamed team %s to \"%s\"", playerName, oldTeamName, newName);
+    CPrintToChatAll("%s%s {default}changed team name to {steamlightgreen}%s", teamColorString, playerName, newName);
     
     PH;
 }
