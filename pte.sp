@@ -11,6 +11,7 @@
 #include <tf2_stocks>
 #include <tf2>
 #include <tf2attributes>
+#include "include/morecolors.inc"
 
 #pragma semicolon 1
 
@@ -41,9 +42,10 @@
 #define Reply ReplyToCommand
 #define elif  else if
 
+#define AC    CAddColor
 #define CC    RegConsoleCmd
 #define CCS   RegConsoleCmdWithShort
-#define AC    RegAdminCmd
+#define RA    RegAdminCmd
 #define ACS   RegAdminCmdWithShort
 
 #define HE             HookEvent
@@ -51,17 +53,17 @@
 #define GENERIC        ADMFLAG_GENERIC
 #define FindEntByClass FindEntityByClassname
 
-#define GET_ARG(%1, %2, %3) char %2[%3]; GetCmdArg(%1, %2, %3)
-#define NEW_CMD(%1)              Pac %1( i client, i args )
-#define NEW_EV_ACT(%1)           Pac %1( Ev event, const c[] name, b dontBroadcast )
-#define NEW_EV(%1)               pub %1( Ev event, const c[] name, b dontBroadcast )
-#define STRCP(%1,%2)             strcopy(%1, sizeof(%1), %2)
-#define FOR_EACH_CLIENT(%1)      for ( i %1 = 1; %1 <= MaxClients; %1++ )
-#define FOR_EACH_ENT(%1)         for ( i %1 = 1; %1 <= EDICT; %1++ )
-#define END_CMD(%1) return EndCommand(client, %1)
-#define END_CMD2(%1, %2)         return EndCommand(%1, %2)
-#define END_CMD3(%1, %2, %3)     return EndCommand(%1, %2, %3)
-#define END_CMD4(%1, %2, %3, %4) return EndCommand(%1, %2, %3, %4)
+#define GET_ARG(%1,%2,%3)     char %2[%3]; GetCmdArg(%1,%2,%3)
+#define NEW_CMD(%1)           Pac %1( i client, i args )
+#define NEW_EV_ACT(%1)        Pac %1( Ev event, const c[] name, b dontBroadcast )
+#define NEW_EV(%1)            pub %1( Ev event, const c[] name, b dontBroadcast )
+#define STRCP(%1,%2)          strcopy(%1, sizeof(%1), %2)
+#define FOR_EACH_CLIENT(%1)   for ( i %1 = 1; %1 <= MaxClients; %1++ )
+#define FOR_EACH_ENT(%1)      for ( i %1 = 1; %1 <= EDICT; %1++ )
+#define END_CMD(%1)           return EndCommand(client, %1)
+#define END_CMD2(%1,%2)       return EndCommand(%1,%2)
+#define END_CMD3(%1,%2,%3)    return EndCommand(%1,%2,%3)
+#define END_CMD4(%1,%2,%3,%4) return EndCommand(%1,%2,%3,%4)
 
 public Plugin myinfo = {
     name        = "passtime.tf extras",
@@ -79,6 +81,12 @@ Han g_hCookieImmunity;
 // ConVars
 ConVar g_cvFOVMin;
 ConVar g_cvFOVMax;
+
+// Demoman boots attribute ConVars
+ConVar g_cvBootsChargeTurn;
+ConVar g_cvBootsMaxHealth;
+ConVar g_cvBootsKillRefill;
+ConVar g_cvBootsMoveSpeed;
 
 // Backup system for FOV tracking when Steam connection is down
 b g_bSteamOnline = true;          // Track if Steam is currently connected
@@ -131,6 +139,13 @@ ArrayList g_hCachedSpawnPoints[2] = {null, null}; // RED and BLU spawn points
 f g_fCurrentDemoResistValue[MAXPLAYERS]; // Track current applied resistance value
 b g_bDemoResistApplied[     MAXPLAYERS]; // Track if resistance is currently applied
 
+// Demoman boots attribute tracking
+f g_fCurrentBootsChargeTurn[MAXPLAYERS];
+f g_fCurrentBootsMaxHealth[ MAXPLAYERS];
+f g_fCurrentBootsKillRefill[MAXPLAYERS];
+f g_fCurrentBootsMoveSpeed[  MAXPLAYERS];
+b g_bBootsAttributesApplied[ MAXPLAYERS];
+
 // Performance optimization: static ammo arrays (replace ArrayList allocations)
 i g_iStaticOriginalAmmo[MAXPLAYERS][34]; // 2 clip values + 32 ammo types
 b g_bStaticAmmoValid[   MAXPLAYERS];     // Track if ammo data is valid
@@ -171,6 +186,10 @@ pub OnPluginStart() {
     CC(  "+sm_pt_resupply",                 CResupDn,          "Resupply inside spawn" );
     CC(  "-sm_pt_resupply",                 CResupUp,          "Resupply inside spawn" );
 
+    CAddColor("steamlightgreen", 0x9DC250); // #9dc250ff
+    CAddColor("teamblu",         0x99CCFF); // #99ccffff
+    CAddColor("teamred",         0xFF3F35); // #ff3f35ff
+
     g_hCookieFOV          = RegClientCookie( "sm_fov_cookie",          "Desired client field of view", CookieAccess_Private );
     g_hCookieInfiniteAmmo = RegClientCookie( "sm_infiniteammo_cookie", "Infinite ammo setting",        CookieAccess_Private );
     g_hCookieImmunity     = RegClientCookie( "sm_immunity_cookie",     "Immunity setting",             CookieAccess_Private );
@@ -179,6 +198,12 @@ pub OnPluginStart() {
     g_cvFOVMin      = CreateConVar( "sm_fov_min",      "70",  "Minimum client field of view", _, 1, 1.0, 1, 175.0 );
     g_cvFOVMax      = CreateConVar( "sm_fov_max",      "120", "Maximum client field of view", _, 1, 1.0, 1, 175.0 );
     g_cvRespawnTime = CreateConVar( "sm_respawn_time", "0.0", "Player respawn delay in seconds", NOTIFY );
+
+    // Demoman boots attribute ConVars
+    g_cvBootsChargeTurn = CreateConVar( "sm_boots_charge_turn", "3.0",  "Charge turn control multiplier for Demoman boots", NOTIFY );
+    g_cvBootsMaxHealth  = CreateConVar( "sm_boots_max_health",  "25.0", "Max health additive bonus for Demoman boots", NOTIFY );
+    g_cvBootsKillRefill = CreateConVar( "sm_boots_kill_refill", "0.25", "Kill refills meter value for Demoman boots", NOTIFY );
+    g_cvBootsMoveSpeed  = CreateConVar( "sm_boots_move_speed",  "1.10", "Move speed bonus (shield required) for Demoman boots", NOTIFY );
 
     // Hook events
     HE( "player_spawn",      EPSpawn );
@@ -738,18 +763,13 @@ NEW_CMD(CReady) {
     i gameRulesTeamOffset = teamIndex + TEAM_OFFSET;
     GameRules_SetProp("m_bTeamReady", g_bIsTeamReady[teamIndex] ? 1 : 0, 1, gameRulesTeamOffset);
     
-    // Get team name for display
-    c teamName[10];
-    if (clientTeam == TFTeam_Red) {
-        STRCP(teamName, "RED");
-    } else {
-        STRCP(teamName, "BLU");
-    }
-    
     // Announce to all players
     c playerName[MAX_NAME_LENGTH];
     GetClientName(client, playerName, sizeof(playerName));
-    PrintToChatAll("%s set team %s to %s", playerName, teamName, g_bIsTeamReady[teamIndex] ? "READY" : "NOT READY");
+    switch (clientTeam) {
+        case TFTeam_Red:  CPrintToChatAll("{teamred}%s {default}changed team state to {steamlightgreen}%s", playerName, g_bIsTeamReady[teamIndex] ? "Ready" : "Not Ready");
+        case TFTeam_Blue: CPrintToChatAll("{teamblu}%s {default}changed team state to {steamlightgreen}%s", playerName, g_bIsTeamReady[teamIndex] ? "Ready" : "Not Ready");
+    }
     
     PH;
 }
@@ -769,20 +789,23 @@ NEW_CMD(CTeamName) {
     GET_ARG(1, newName, 64);
     
     // Validate name length
-    if (strlen(newName) < 1)  END_CMD2(client, "Team name cannot be empty.");
-    if (strlen(newName) > 32) END_CMD2(client, "Team name cannot be longer than 32 characters.");
+    if (strlen(newName) < 1) END_CMD2(client, "Team name cannot be empty.");
+    if (strlen(newName) > 5) END_CMD2(client, "Team name cannot be longer than 32 characters.");
     
     // Get team entity
     i teamEntity = -1;
-    if (clientTeam == TFTeam_Red) {
-        teamEntity = FindEntityByClassname(-1, "tf_team");
-        while (teamEntity != -1 && GetEntProp(teamEntity, Prop_Send, "m_iTeamNum") != 2) {
-            teamEntity = FindEntityByClassname(teamEntity, "tf_team");
+    switch (clientTeam) {
+        case TFTeam_Red: {
+            teamEntity = FindEntityByClassname(-1, "tf_team");
+            while (teamEntity != -1 && GetEntProp(teamEntity, Prop_Send, "m_iTeamNum") != 2) {
+                teamEntity = FindEntityByClassname(teamEntity, "tf_team");
+            }
         }
-    } else {
-        teamEntity = FindEntityByClassname(-1, "tf_team");
-        while (teamEntity != -1 && GetEntProp(teamEntity, Prop_Send, "m_iTeamNum") != 3) {
-            teamEntity = FindEntityByClassname(teamEntity, "tf_team");
+        case TFTeam_Blue: {
+            teamEntity = FindEntityByClassname(-1, "tf_team");
+            while (teamEntity != -1 && GetEntProp(teamEntity, Prop_Send, "m_iTeamNum") != 3) {
+                teamEntity = FindEntityByClassname(teamEntity, "tf_team");
+            }
         }
     }
     
@@ -791,15 +814,13 @@ NEW_CMD(CTeamName) {
     // Set the team name
     SetEntPropString(teamEntity, Prop_Data, "m_szTeamname", newName);
     
-    // Get old team name for display
-    c oldTeamName[10];
-    if (clientTeam == TFTeam_Red) STRCP(oldTeamName, "RED");
-    else STRCP(oldTeamName, "BLU");
-    
     // Announce to all players
     c playerName[MAX_NAME_LENGTH];
     GetClientName(client, playerName, sizeof(playerName));
-    PrintToChatAll("%s renamed team %s to \"%s\"", playerName, oldTeamName, newName);
+    switch (clientTeam) {
+        case TFTeam_Red:  CPrintToChatAll("{teamred}%s {default}changed team name to {steamlightgreen}%s", playerName, newName);
+        case TFTeam_Blue: CPrintToChatAll("{teamblu}%s {default}changed team name to {steamlightgreen}%s", playerName, newName);
+    }
     
     PH;
 }
@@ -1138,6 +1159,8 @@ NEW_EV(EPSpawn) {
     if ( !IsValidClient( client ) ) return;
 
     ApplyDemoResistance(client);
+    
+    CreateTimer(0.1, Timer_ApplyBootsAttributes, GetClientUserId(client), TIMER_FLAG_NO_MAPCHANGE);
 
     // Try to restore settings from cookies first
     if ( AreClientCookiesCached( client ) ) {
@@ -1794,6 +1817,88 @@ v ApplyDemoResistance(i client) {
             g_bDemoResistApplied[client] = false;
         }
     }
+}
+
+v ApplyBootsAttributes(i client) {
+    if (!IsValidClient(client)) return;
+    
+    TFClassType playerClass = TF2_GetPlayerClass(client);
+    if (playerClass != TFClass_DemoMan) {
+        if (g_bBootsAttributesApplied[client]) {
+            g_bBootsAttributesApplied[client] = false;
+            g_fCurrentBootsChargeTurn[client] = 0.0;
+            g_fCurrentBootsMaxHealth[client] = 0.0;
+            g_fCurrentBootsKillRefill[client] = 0.0;
+            g_fCurrentBootsMoveSpeed[client] = 0.0;
+        }
+        return;
+    }
+    
+    i bootsEntity = -1;
+    i maxEntities = GetMaxEntities();
+    
+    for (i entity = MaxClients + 1; entity < maxEntities; entity++) {
+        if (!IsValidEntity(entity)) continue;
+        
+        c classname[64];
+        GetEntityClassname(entity, classname, sizeof(classname));
+        if (!StrEqual(classname, "tf_wearable")) continue;
+        
+        i owner = GetEntPropEnt(entity, Prop_Send, "m_hOwnerEntity");
+        if (owner != client) continue;
+        
+        i itemDefIndex = GetEntProp(entity, Prop_Send, "m_iItemDefinitionIndex");
+        if (itemDefIndex == 405 || itemDefIndex == 608) {
+            bootsEntity = entity;
+            break;
+        }
+    }
+    
+    if (bootsEntity == -1) {
+        if (g_bBootsAttributesApplied[client]) {
+            g_bBootsAttributesApplied[client] = false;
+            g_fCurrentBootsChargeTurn[client] = 0.0;
+            g_fCurrentBootsMaxHealth[client] = 0.0;
+            g_fCurrentBootsKillRefill[client] = 0.0;
+            g_fCurrentBootsMoveSpeed[client] = 0.0;
+        }
+        return;
+    }
+    
+    f chargeTurn = g_cvBootsChargeTurn.FloatValue;
+    f maxHealth = g_cvBootsMaxHealth.FloatValue;
+    f killRefill = g_cvBootsKillRefill.FloatValue;
+    f moveSpeed = g_cvBootsMoveSpeed.FloatValue;
+    
+    b needsUpdate = false;
+    if (!g_bBootsAttributesApplied[client] ||
+        g_fCurrentBootsChargeTurn[client] != chargeTurn ||
+        g_fCurrentBootsMaxHealth[client] != maxHealth ||
+        g_fCurrentBootsKillRefill[client] != killRefill ||
+        g_fCurrentBootsMoveSpeed[client] != moveSpeed) {
+        needsUpdate = true;
+    }
+    
+    if (needsUpdate) {
+        TF2Attrib_SetByName(bootsEntity, "mult charge turn control", chargeTurn);
+        TF2Attrib_SetByName(bootsEntity, "max health additive bonus", maxHealth);
+        TF2Attrib_SetByName(bootsEntity, "kill refills meter", killRefill);
+        TF2Attrib_SetByName(bootsEntity, "move speed bonus shield required", moveSpeed);
+        
+        g_fCurrentBootsChargeTurn[client] = chargeTurn;
+        g_fCurrentBootsMaxHealth[client] = maxHealth;
+        g_fCurrentBootsKillRefill[client] = killRefill;
+        g_fCurrentBootsMoveSpeed[client] = moveSpeed;
+        g_bBootsAttributesApplied[client] = true;
+    }
+}
+
+pub Act Timer_ApplyBootsAttributes(Handle timer, any userid) {
+    i client = GetClientOfUserId(userid);
+    if (client > 0 && IsValidClient(client)) {
+        ApplyBootsAttributes(client);
+    }
+    return Plugin_Stop;
 }
 
 pub v OnMapStart() {
