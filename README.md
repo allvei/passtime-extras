@@ -52,10 +52,10 @@
 
 | command                | default | range       | description                                              |
 |------------------------|---------|-------------|----------------------------------------------------------|
-| sm_boots_charge_turn   | `3.0`   | `0.0-10.0`  | Charge turn control multiplier for Demoman boots         |
-| sm_boots_max_health    | `25.0`  | `0.0-200.0` | Max health additive bonus for Demoman boots              |
-| sm_boots_kill_refill   | `0.25`  | `0.0-1.0`   | Kill refills meter value for Demoman boots               |
-| sm_boots_move_speed    | `1.10`  | `0.0-2.0`   | Move speed bonus (shield required) for Demoman boots     |
+| sm_boots_charge_turn   | `3.0`   | `-`         | Charge turn control multiplier for Demoman boots         |
+| sm_boots_max_health    | `25.0`  | `-`         | Max health additive bonus for Demoman boots              |
+| sm_boots_kill_refill   | `0.25`  | `-`         | Kill refills meter value for Demoman boots               |
+| sm_boots_move_speed    | `1.10`  | `-`         | Move speed bonus (shield required) for Demoman boots     |
 
 The plugin automatically detects and applies custom attributes to Demoman boots (The Bootlegger, item def 608, and Ali Baba's Wee Booties, item def 405). These convars allow server admins to dynamically control the boots' attributes during gameplay or through the server config file.
 
