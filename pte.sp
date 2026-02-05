@@ -1,5 +1,4 @@
 // Imports
-#include <morecolors>
 #include <clientprefs>
 #include <clients>
 #include <sdkhooks>
@@ -73,7 +72,7 @@ public Plugin myinfo = {
     name        = "passtime.tf extras",
     author      = "xCape",
     description = "Plugin for use in passtime.tf servers",
-    version     = "1.9.0",
+    version     = "1.10.0",
     url         = "https://github.com/allvei/passtime-extras/"
 }
 
@@ -217,6 +216,7 @@ pub OnPluginStart() {
     HE( "player_spawn",      EPSpawn );
     HE( "player_disconnect", EPDisconnect );
     HE( "player_death",      EPDeath );
+    HE( "post_inventory_application", EPInventoryApplication );
 
     // Initialize team ready states
     g_bIsTeamReady[0] = false;
@@ -555,7 +555,10 @@ NEW_CMD(CImmune) {
 
     SetImmunityCookie( client, g_bImmunity[ client ] );
 
-    if ( IsPlayerAlive( client ) ) TF2_RespawnPlayer( client );
+    if ( IsPlayerAlive( client ) ) {
+        TF2_RespawnPlayer( client );
+        CreateTimer(0.1, Timer_ApplyBootsAttributes, GetClientUserId(client), TIMER_FLAG_NO_MAPCHANGE);
+    }
 
     END_CMD3( client, "Immunity %s.", g_bImmunity[ client ] ? "enabled" : "disabled" );
 }
@@ -568,7 +571,10 @@ NEW_CMD(CInfAmmo) {
 
     SetAmmoCookie( client, g_bInfiniteAmmo[ client ] );
 
-    if ( IsPlayerAlive( client ) ) TF2_RespawnPlayer( client );
+    if ( IsPlayerAlive( client ) ) {
+        TF2_RespawnPlayer( client );
+        CreateTimer(0.1, Timer_ApplyBootsAttributes, GetClientUserId(client), TIMER_FLAG_NO_MAPCHANGE);
+    }
 
     END_CMD3( client, "Infinite ammo %s.", g_bInfiniteAmmo[ client ] ? "enabled" : "disabled" );
 }
@@ -596,6 +602,7 @@ NEW_CMD(CSetClass) {
         if ( TF2_GetClientTeam( tid ) == TFTeam_Spectator ) continue;
         TF2_SetPlayerClass( tid, tfclass );
         TF2_RespawnPlayer( tid );
+        CreateTimer(0.1, Timer_ApplyBootsAttributes, GetClientUserId(tid), TIMER_FLAG_NO_MAPCHANGE);
         changed = true;
     }
 
@@ -1220,6 +1227,13 @@ NEW_EV(EPSpawn) {
     }
 }
 
+NEW_EV(EPInventoryApplication) {
+    i client = GetClientOfUserId( event.GetInt( "userid" ) );
+    if ( !IsValidClient( client ) ) return;
+    
+    CreateTimer(0.1, Timer_ApplyBootsAttributes, GetClientUserId(client), TIMER_FLAG_NO_MAPCHANGE);
+}
+
 // Retrieves the client's FOV from their local config and stores it in a cookie
 pub OnFOVQueried( QueryCookie cookie, i client, ConVarQueryResult result, const c[] cvarName, const c[] fov ) {
     if ( result != ConVarQuery_Okay ) return;
@@ -1366,6 +1380,9 @@ v Resupply(i client) {
 
     // Reset player velocity to zero
     TeleportEntity(client, NULL_VECTOR, NULL_VECTOR, {0.0, 0.0, 0.0});
+
+    // Reapply boots attributes after resupply
+    CreateTimer(0.1, Timer_ApplyBootsAttributes, GetClientUserId(client), TIMER_FLAG_NO_MAPCHANGE);
 
     g_bResupplyUp[client] = true;
 }
