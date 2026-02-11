@@ -776,12 +776,12 @@ NEW_CMD(CReady) {
     
     // Convert TF team to array index
     i teamIndex = (clientTeam == TFTeam_Red) ? RED : BLU;
+    i gameRulesTeamOffset = teamIndex + TEAM_OFFSET;
     
-    // Toggle ready state
-    g_bIsTeamReady[teamIndex] = !g_bIsTeamReady[teamIndex];
+    // Read current state from game rules and toggle
+    g_bIsTeamReady[teamIndex] = !GameRules_GetProp("m_bTeamReady", 1, gameRulesTeamOffset);
     
     // Update game rules
-    i gameRulesTeamOffset = teamIndex + TEAM_OFFSET;
     GameRules_SetProp("m_bTeamReady", g_bIsTeamReady[teamIndex] ? 1 : 0, 1, gameRulesTeamOffset);
     
     // Announce to all players
